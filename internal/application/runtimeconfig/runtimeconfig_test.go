@@ -36,7 +36,7 @@ func testConfig() *config.Config {
 		},
 		Gemini: config.GeminiConfig{
 			APIKey: "env-key",
-			Model:  "gemini-1.5-flash",
+			Model:  "gemini-3.6-flash",
 		},
 		Threads: config.ThreadsConfig{
 			ClientID:    "env-client",

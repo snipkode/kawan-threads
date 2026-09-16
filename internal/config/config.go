@@ -100,7 +100,7 @@ func LoadConfig() (*Config, error) {
 
 	// --- Gemini ---
 	cfg.Gemini.APIKey = os.Getenv("GEMINI_API_KEY")
-	cfg.Gemini.Model = getEnvOrDefault("GEMINI_MODEL", "gemini-1.5-flash")
+	cfg.Gemini.Model = getEnvOrDefault("GEMINI_MODEL", "gemini-3.6-flash")
 
 	// --- Threads ---
 	cfg.Threads.ClientID = os.Getenv("THREADS_CLIENT_ID")

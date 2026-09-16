@@ -81,23 +81,19 @@ export default function Dashboard() {
                 </Link>
               </div>
               {content.data?.length ? (
-                <div className="space-y-2">
+                <div className="divide-y divide-slate-100 overflow-hidden rounded-2xl bg-white ring-1 ring-slate-200">
                   {content.data.map((c) => (
-                    <Link key={c.id} to={`/content/${c.id}/preview`}>
-                      <Card className="py-3">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-medium text-slate-800">
-                              {c.hook || c.body}
-                            </p>
-                            <div className="mt-1.5 flex items-center gap-1.5">
-                              <PillarBadge pillar={c.pillar} />
-                              <StatusBadge status={c.status} />
-                            </div>
-                          </div>
-                          <span className="shrink-0 text-[11px] text-slate-400">{timeAgo(c.created_at)}</span>
+                    <Link key={c.id} to={`/content/${c.id}/preview`} className="flex items-center justify-between gap-2 px-4 py-3 active:bg-slate-50">
+                      <div className="min-w-0">
+                        <p className="truncate text-[13px] font-medium leading-snug text-slate-800">
+                          {c.hook || c.body}
+                        </p>
+                        <div className="mt-1 flex items-center gap-1">
+                          <PillarBadge pillar={c.pillar} />
+                          <StatusBadge status={c.status} />
                         </div>
-                      </Card>
+                      </div>
+                      <span className="shrink-0 text-[11px] text-slate-400">{timeAgo(c.created_at)}</span>
                     </Link>
                   ))}
                 </div>

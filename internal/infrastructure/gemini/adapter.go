@@ -19,6 +19,14 @@ import (
 	"kawan-threads/internal/infrastructure/gemini/prompts"
 )
 
+// truncate limits a string for log/error inclusion.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
 const geminiAPIBase = "https://generativelanguage.googleapis.com/v1beta/models"
 
 // GeminiAdapter implements port.AIProvider using the Gemini REST API.
@@ -49,13 +57,18 @@ func (g *GeminiAdapter) GenerateContent(ctx context.Context, req port.GenerateCo
 	if apiKey == "" {
 		return port.GeneratedContent{}, errors.New("gemini: API key not configured — set it in Settings (AI section)")
 	}
-	model := g.settings.Str(runtimeconfig.GeminiModel, "gemini-1.5-flash")
+	model := g.settings.Str(runtimeconfig.GeminiModel, "gemini-3.6-flash")
 
 	prompt := g.buildPrompt(req)
 
+	// On a failed attempt, nudge the model to return ONLY the JSON object.
+	const correction = "\n\nCATATAN PENTING: Jawaban sebelumnya tidak valid." +
+		" Balas dengan SATU objeck JSON valid saja (tanpa teks lain, tanpa markdown, tanpa kalimat pengantar)."
+
 	var (
-		result  port.GeneratedContent
-		lastErr error
+		result      port.GeneratedContent
+		lastErr     error
+		retryPrompt = prompt
 	)
 
 	backoffs := []time.Duration{1 * time.Second, 3 * time.Second, 9 * time.Second}
@@ -75,15 +88,17 @@ func (g *GeminiAdapter) GenerateContent(ctx context.Context, req port.GenerateCo
 			}
 		}
 
-		raw, err := g.callAPI(ctx, prompt, model, apiKey)
+		raw, err := g.callAPI(ctx, retryPrompt, model, apiKey)
 		if err != nil {
 			lastErr = fmt.Errorf("attempt %d: API call failed: %w", attempt+1, err)
+			retryPrompt = prompt + correction
 			continue
 		}
 
 		result, err = parseGeneratedContent(raw)
 		if err != nil {
 			lastErr = fmt.Errorf("attempt %d: parse failed: %w", attempt+1, err)
+			retryPrompt = prompt + correction
 			continue
 		}
 
@@ -146,10 +161,11 @@ type geminiPart struct {
 }
 
 type generationConfig struct {
-	Temperature     float64 `json:"temperature"`
-	TopK            int     `json:"topK"`
-	TopP            float64 `json:"topP"`
-	MaxOutputTokens int     `json:"maxOutputTokens"`
+	Temperature      float64 `json:"temperature"`
+	TopK             int     `json:"topK"`
+	TopP             float64 `json:"topP"`
+	MaxOutputTokens  int     `json:"maxOutputTokens"`
+	ResponseMimeType string  `json:"responseMimeType,omitempty"`
 }
 
 type geminiResponse struct {
@@ -168,10 +184,11 @@ func (g *GeminiAdapter) callAPI(ctx context.Context, prompt, model, apiKey strin
 			{Parts: []geminiPart{{Text: prompt}}},
 		},
 		GenerationConfig: generationConfig{
-			Temperature:     0.8,
-			TopK:            40,
-			TopP:            0.95,
-			MaxOutputTokens: 2048,
+			Temperature:      0.8,
+			TopK:             40,
+			TopP:             0.95,
+			MaxOutputTokens:  2048,
+			ResponseMimeType: "application/json",
 		},
 	}
 
@@ -243,6 +260,45 @@ type geminiOutputJSON struct {
 	} `json:"quality"`
 }
 
+// extractJSONObject returns the first balanced JSON object, scanning for
+// braces while respecting strings and escapes — so a literal `}` inside e.g. a
+// CTA or hook no longer truncates the payload.
+func extractJSONObject(text string) string {
+	start := strings.Index(text, "{")
+	if start == -1 {
+		return ""
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(text); i++ {
+		ch := text[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case ch == '\\':
+				escaped = true
+			case ch == '"':
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return text[start : i+1]
+			}
+		}
+	}
+	return ""
+}
+
 func parseGeneratedContent(raw string) (port.GeneratedContent, error) {
 	// Strip markdown code fences if present.
 	text := strings.TrimSpace(raw)
@@ -257,16 +313,14 @@ func parseGeneratedContent(raw string) (port.GeneratedContent, error) {
 			text = text[:end]
 		}
 	}
-	// Find JSON object boundaries.
-	start := strings.Index(text, "{")
-	end := strings.LastIndex(text, "}")
-	if start == -1 || end == -1 || end <= start {
-		return port.GeneratedContent{}, fmt.Errorf("no JSON object found in response")
+	// Extract the first balanced JSON object (string/escape aware).
+	snippet := extractJSONObject(text)
+	if snippet == "" {
+		return port.GeneratedContent{}, fmt.Errorf("no JSON object found in response (got %q)", truncate(text, 300))
 	}
-	text = text[start : end+1]
 
 	var out geminiOutputJSON
-	if err := json.Unmarshal([]byte(text), &out); err != nil {
+	if err := json.Unmarshal([]byte(snippet), &out); err != nil {
 		return port.GeneratedContent{}, fmt.Errorf("JSON unmarshal: %w", err)
 	}
 

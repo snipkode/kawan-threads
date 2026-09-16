@@ -50,7 +50,7 @@ export default function Settings() {
               </div>
               <div>
                 <label className="label">Model</label>
-                <input className="input" placeholder="gemini-1.5-flash" value={s.gemini_model ?? ''} onChange={set('gemini_model')} />
+                <input className="input" placeholder="gemini-3.6-flash" value={s.gemini_model ?? ''} onChange={set('gemini_model')} />
               </div>
             </Card>
 

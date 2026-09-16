@@ -15,6 +15,7 @@ export default {
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+        serif: ['Newsreader', 'Georgia', 'Times New Roman', 'serif'],
       },
     },
   },

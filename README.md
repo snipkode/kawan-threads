@@ -135,7 +135,7 @@ effect without a restart; the worker re-reads them on every tick.
 | `FIREBASE_DATABASE_URL` | ✔ env | e.g. `https://my-project.firebaseio.com` |
 | `FIREBASE_SERVICE_ACCOUNT_BASE64` | ✔ env | Base64-encoded service-account JSON |
 | `GEMINI_API_KEY` | UI | Runtime — enables generation (key `gemini_api_key`) |
-| `GEMINI_MODEL` | UI | Runtime — default `gemini-1.5-flash` |
+| `GEMINI_MODEL` | UI | Runtime — default `gemini-3.6-flash` |
 | `THREADS_CLIENT_ID` / `CLIENT_SECRET` / `REDIRECT_URI` | UI | Runtime — Threads OAuth app |
 | `THREADS_ACCESS_TOKEN` / `USER_ID` | UI | Runtime — long-lived token + account (token also saved by OAuth callback) |
 | `SCHEDULER_TIMEZONE` | UI | Runtime — default `Asia/Jakarta` |

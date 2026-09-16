@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import { Check, X, RefreshCw, Pencil, PencilOff } from 'lucide-react'
 import { BackHeader } from '../../components/layout/Header'
 import { Card, Spinner, ErrorBox } from '../../components/ui/Card'
@@ -28,7 +28,7 @@ export default function ContentPreview() {
   const [pickedHook, setPickedHook] = useState(null)
   const [draft, setDraft] = useState(null)
 
-  const c = preview.data
+  const c = preview.data?.content
   const isDraft = c?.status === 'DRAFT'
 
   const startEdit = () => {
@@ -42,30 +42,35 @@ export default function ContentPreview() {
   }
 
   return (
-    <>
-      <BackHeader to="/content" title="Content" />
-      <div className="space-y-3 p-4">
+    <div className="flex flex-col min-h-screen">
+      <BackHeader to="/content" title="Preview" />
+
+      <div className="flex-1 space-y-3 p-4 pb-28">
         {preview.isLoading && <Spinner label="Memuat preview…" />}
         {preview.isError && <ErrorBox message={apiMessage(preview.error)} />}
 
         {c && (
           <>
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <PillarBadge pillar={c.pillar} />
-                <StatusBadge status={c.status} />
+            {/* Meta info */}
+            <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-slate-200">
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <div className="flex flex-wrap items-center gap-1">
+                  <PillarBadge pillar={c.pillar} />
+                  <StatusBadge status={c.status} />
+                </div>
+                <QualityScore quality={c.quality} conversation={c.conversation_score} />
               </div>
-              <QualityScore quality={c.quality} conversation={c.conversation_score} />
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                {[c.topic, c.audience, c.tone, c.format].filter(Boolean).join(' · ')}
+              </p>
             </div>
 
-            <p className="text-xs text-slate-500">
-              Topic: {c.topic} · {c.audience} · {c.tone} · {c.format}
-            </p>
-
+            {/* Thread preview */}
             {!editing && (
               <ThreadPreview content={c} onPickHook={isDraft ? setPickedHook : null} pickedHook={pickedHook?.hook} />
             )}
 
+            {/* Edit form */}
             {editing && (
               <Card className="space-y-3">
                 <div>
@@ -85,73 +90,99 @@ export default function ContentPreview() {
                   <input className="input" value={draft.conversation_question || ''} onChange={(e) => setDraft({ ...draft, conversation_question: e.target.value })} />
                 </div>
                 <button className="btn-primary w-full" onClick={saveEdit} disabled={update.isPending}>
-                  Simpan
+                  {update.isPending ? '…' : 'Simpan'}
                 </button>
               </Card>
             )}
 
+            {/* Scheduled info */}
             {c.scheduled_at && (
-              <Card className="flex items-center justify-between py-3">
-                <div>
-                  <p className="text-xs font-semibold text-slate-500">Dijadwalkan</p>
+              <div className="flex items-center gap-2 rounded-2xl bg-white px-4 py-3 ring-1 ring-slate-200">
+                <div className="flex-1">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Dijadwalkan</p>
                   <p className="text-sm font-bold text-slate-800">{formatTime(c.scheduled_at)}</p>
                 </div>
-              </Card>
-            )}
-
-            {c.approval && (
-              <Card className="py-3 text-xs text-slate-500">
-                <p className="font-semibold text-slate-600">Catatan Review</p>
-                <p>{c.approval.reason || 'Approved otomatis — siap masuk antrian.'}</p>
-              </Card>
-            )}
-
-            {/* Action bar */}
-            {isDraft && (
-              <div className="grid grid-cols-2 gap-2">
-                {!editing ? (
-                  <button className="btn-secondary" onClick={startEdit}>
-                    <Pencil size={15} /> Edit
-                  </button>
-                ) : (
-                  <button className="btn-secondary" onClick={() => { setEditing(false); setDraft(null) }}>
-                    <PencilOff size={15} /> Batal
-                  </button>
-                )}
-                <button
-                  className="btn-secondary"
-                  onClick={() => regen.mutate({})}
-                  disabled={regen.isPending}
-                >
-                  <RefreshCw size={15} /> {regen.isPending ? '…' : 'Regenerate'}
-                </button>
-                <button className="btn-danger" onClick={() => setRejecting((v) => !v)}>
-                  <X size={15} /> Reject
-                </button>
-                <button className="btn-primary" onClick={() => approve.mutate()} disabled={approve.isPending}>
-                  <Check size={15} /> {approve.isPending ? '…' : 'Approve & Queue'}
-                </button>
               </div>
             )}
 
+            {/* Review note */}
+            {c.approval && (
+              <div className="rounded-2xl bg-white px-4 py-3 ring-1 ring-slate-200">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mb-1">Catatan Review</p>
+                <p className="text-[13px] text-slate-600">{c.approval.reason || 'Approved otomatis — siap masuk antrian.'}</p>
+              </div>
+            )}
+
+            {/* Reject form */}
             {rejecting && (
               <Card className="space-y-2">
                 <label className="label">Alasan reject</label>
-                <textarea rows={2} className="input" value={reason} onChange={(e) => setReason(e.target.value)} />
-                <button
-                  className="btn-danger w-full"
-                  disabled={!reason.trim() || reject.isPending}
-                  onClick={() =>
-                    reject.mutate(reason, { onSuccess: () => { setRejecting(false); setReason('') } })
-                  }
-                >
-                  {reject.isPending ? '…' : 'Konfirmasi Reject'}
-                </button>
+                <textarea rows={2} className="input" placeholder="Tulis alasan…" value={reason} onChange={(e) => setReason(e.target.value)} />
+                <div className="flex gap-2">
+                  <button
+                    className="btn-secondary flex-1"
+                    onClick={() => { setRejecting(false); setReason('') }}
+                  >
+                    Batal
+                  </button>
+                  <button
+                    className="btn-danger flex-1"
+                    disabled={!reason.trim() || reject.isPending}
+                    onClick={() =>
+                      reject.mutate(reason, { onSuccess: () => { setRejecting(false); setReason('') } })
+                    }
+                  >
+                    {reject.isPending ? '…' : 'Konfirmasi'}
+                  </button>
+                </div>
               </Card>
             )}
           </>
         )}
       </div>
-    </>
+
+      {/* Sticky action bar */}
+      {c && isDraft && (
+        <div className="fixed bottom-0 left-0 right-0 z-20 border-t border-slate-200 bg-white/95 backdrop-blur-sm px-4 py-3 safe-area-bottom">
+          <div className="flex items-center gap-2">
+            {/* Edit / Batal */}
+            <button
+              className="btn-secondary flex-none px-3 py-2"
+              onClick={editing ? () => { setEditing(false); setDraft(null) } : startEdit}
+              title={editing ? 'Batal edit' : 'Edit'}
+            >
+              {editing ? <PencilOff size={16} /> : <Pencil size={16} />}
+            </button>
+
+            {/* Regenerate */}
+            <button
+              className="btn-secondary flex-none px-3 py-2"
+              onClick={() => regen.mutate({})}
+              disabled={regen.isPending}
+              title="Regenerate"
+            >
+              <RefreshCw size={16} className={regen.isPending ? 'animate-spin' : ''} />
+            </button>
+
+            {/* Reject */}
+            <button
+              className="btn-danger flex-1 py-2"
+              onClick={() => setRejecting((v) => !v)}
+            >
+              <X size={15} /> Reject
+            </button>
+
+            {/* Approve */}
+            <button
+              className="btn-primary flex-1 py-2"
+              onClick={() => approve.mutate()}
+              disabled={approve.isPending}
+            >
+              <Check size={15} /> {approve.isPending ? '…' : 'Approve'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }

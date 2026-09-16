@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Filter } from 'lucide-react'
+import { Plus, Filter, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Header } from '../../components/layout/Header'
 import { Card, Spinner, EmptyState } from '../../components/ui/Card'
 import { StatusBadge, PillarBadge } from '../../components/ui/Badge'
@@ -15,10 +15,22 @@ const TABS = [
   { value: STATUS.PUBLISHED, label: 'Terbit' },
 ]
 
+const PAGE_SIZE = 8
+
 export default function ContentList() {
   const [status, setStatus] = useState('')
   const [pillar, setPillar] = useState('')
-  const list = useContentList({ status: status || undefined, pillar: pillar || undefined, limit: 50 })
+  const [page, setPage] = useState(0)
+  const list = useContentList({ status: status || undefined, pillar: pillar || undefined, limit: PAGE_SIZE, offset: page * PAGE_SIZE })
+
+  const items = list.data || []
+  const hasMore = items.length === PAGE_SIZE
+  const total = page * PAGE_SIZE + items.length
+
+  const switchFilter = (setter) => (v) => {
+    setter(v)
+    setPage(0)
+  }
 
   return (
     <>
@@ -37,7 +49,7 @@ export default function ContentList() {
           {TABS.map((t) => (
             <button
               key={t.value}
-              onClick={() => setStatus(t.value)}
+              onClick={() => switchFilter(setStatus)(t.value)}
               className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold transition ${
                 status === t.value
                   ? 'bg-brand-600 text-white'
@@ -53,7 +65,7 @@ export default function ContentList() {
           <Filter size={14} className="text-slate-400" />
           <select
             value={pillar}
-            onChange={(e) => setPillar(e.target.value)}
+            onChange={(e) => switchFilter(setPillar)(e.target.value)}
             className="flex-1 bg-transparent text-sm outline-none"
           >
             <option value="">Semua Pillar</option>
@@ -67,31 +79,56 @@ export default function ContentList() {
 
         {list.isLoading ? (
           <Spinner label="Memuat konten…" />
-        ) : list.data?.length ? (
-          <div className="space-y-2">
-            {list.data.map((c) => (
-              <Link key={c.id} to={`/content/${c.id}/preview`}>
-                <Card className="py-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-slate-800">
-                        {c.hook || 'Tanpa hook'}
-                      </p>
-                      <p className="mt-1 line-clamp-2 text-xs text-slate-500">{c.body}</p>
-                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                        <PillarBadge pillar={c.pillar} />
-                        <StatusBadge status={c.status} />
-                        {c.quality?.hook != null && (
-                          <span className="chip bg-emerald-50 text-emerald-600">Q{c.quality.hook}</span>
-                        )}
+        ) : items.length ? (
+          <>
+            <div className="space-y-3">
+              {items.map((c) => (
+                <Link key={c.id} to={`/content/${c.id}/preview`}>
+                  <Card className="py-3 mb-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-slate-800">
+                          {c.hook || 'Tanpa hook'}
+                        </p>
+                        <p className="mt-1 line-clamp-2 text-xs text-slate-500">{c.body}</p>
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                          <PillarBadge pillar={c.pillar} />
+                          <StatusBadge status={c.status} />
+                          {c.quality?.hook != null && (
+                            <span className="chip bg-emerald-50 text-emerald-600">Q{c.quality.hook}</span>
+                          )}
+                        </div>
                       </div>
+                      <span className="shrink-0 text-[11px] text-slate-400">{timeAgo(c.created_at)}</span>
                     </div>
-                    <span className="shrink-0 text-[11px] text-slate-400">{timeAgo(c.created_at)}</span>
-                  </div>
-                </Card>
-              </Link>
-            ))}
-          </div>
+                  </Card>
+                </Link>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <button
+                className="btn-secondary px-3 py-2 text-xs"
+                disabled={page === 0}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+              >
+                <ChevronLeft size={14} /> Sebelumnya
+              </button>
+              <span className="text-xs text-slate-400">Halaman {page + 1}</span>
+              <button
+                className="btn-secondary px-3 py-2 text-xs"
+                disabled={!hasMore}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Berikutnya <ChevronRight size={14} />
+              </button>
+            </div>
+            {!hasMore && page > 0 && (
+              <p className="text-center text-[11px] text-slate-400">
+                {total} konten ditampilkan
+              </p>
+            )}
+          </>
         ) : (
           <EmptyState title="Tidak ada konten" hint="Buat konten baru lewat tombol Create." />
         )}

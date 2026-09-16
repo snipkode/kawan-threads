@@ -1,0 +1,35 @@
+# Environment files — never commit secrets
+.env
+.env.*
+!.env.example
+
+# Service account credentials
+service-account*.json
+
+# JSON files (data, tokens, etc.) — but NOT go.sum / package-lock.json
+*.json
+!go.sum
+!web/package-lock.json
+
+# Local dev datastore
+data/
+
+# Node / frontend build artefacts
+node_modules/
+dist/
+web/node_modules/
+web/dist/
+
+# Go build artefacts
+vendor/
+tmp/
+dist/
+bin/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo

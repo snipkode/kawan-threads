@@ -1,0 +1,16 @@
+.git
+.gitignore
+*.md
+.env
+.env.*
+!.env.example
+web/dist
+web/node_modules
+npm-debug.log
+Dockerfile
+docker-compose.yml
+bin
+tmp
+coverage.out
+.idea
+.vscode

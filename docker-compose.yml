@@ -1,0 +1,65 @@
+name: kawan-threads
+
+services:
+  api:
+    build:
+      context: .
+      target: api
+    container_name: kawan-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8080}:8080"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      APP_PORT: "8080"
+      # Default to the local file datastore for a zero-credential dev/demo run.
+      # Set DATA_STORE=firebase (+ Firebase env vars) for production.
+      DATA_STORE: "${DATA_STORE:-file}"
+      DATA_FILE: "${DATA_FILE:-/data/db.json}"
+      FIREBASE_DATABASE_URL: "${FIREBASE_DATABASE_URL:-}"
+    volumes:
+      - kawan-data:/data
+    networks:
+      - kawan
+
+  worker:
+    build:
+      context: .
+      target: worker
+    container_name: kawan-worker
+    restart: unless-stopped
+    depends_on:
+      - api
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATA_STORE: "${DATA_STORE:-file}"
+      DATA_FILE: "${DATA_FILE:-/data/db.json}"
+      FIREBASE_DATABASE_URL: "${FIREBASE_DATABASE_URL:-}"
+    volumes:
+      - kawan-data:/data
+    networks:
+      - kawan
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    container_name: kawan-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "${WEB_PORT:-3000}:80"
+    networks:
+      - kawan
+
+volumes:
+  kawan-data:
+
+networks:
+  kawan:
+    driver: bridge

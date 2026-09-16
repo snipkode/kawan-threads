@@ -78,9 +78,20 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 
+// threadsConfigurer is implemented by a ThreadsPort that can report whether
+// it holds the minimum credentials to call the Threads API.
+type threadsConfigurer interface {
+	Configured() bool
+}
+
 // runCycle collects insights for published posts that have no performance
 // record yet, then refreshes the AMAB strategy recommendation.
 func (w *Worker) runCycle(ctx context.Context) {
+	if c, ok := w.opts.ThreadsPort.(threadsConfigurer); ok && !c.Configured() {
+		w.opts.Logger.Debug("analytics: Threads not configured, skipping cycle")
+		return
+	}
+
 	posts, err := w.opts.PublishedRepo.FindAll(ctx)
 	if err != nil {
 		w.opts.Logger.Error("analytics: load published posts failed", "error", err)

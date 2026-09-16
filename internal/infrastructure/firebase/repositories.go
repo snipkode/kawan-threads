@@ -507,3 +507,32 @@ func (r *ExperimentFirebaseRepository) FindAll(ctx context.Context) ([]*entity.E
 	})
 	return result, nil
 }
+
+// ---------------------------------------------------------------------------
+// SettingsFirebaseRepository
+// ---------------------------------------------------------------------------
+
+// SettingsFirebaseRepository implements repository.SettingsRepository using
+// Firebase RTDB at path app/settings.
+type SettingsFirebaseRepository struct {
+	client *FirebaseClient
+}
+
+func NewSettingsRepository(client *FirebaseClient) *SettingsFirebaseRepository {
+	return &SettingsFirebaseRepository{client: client}
+}
+
+func (r *SettingsFirebaseRepository) GetSettings(ctx context.Context) (map[string]interface{}, error) {
+	value := map[string]interface{}{}
+	if err := r.client.Get(ctx, "app/settings", &value); err != nil {
+		return nil, err
+	}
+	if value == nil {
+		value = map[string]interface{}{}
+	}
+	return value, nil
+}
+
+func (r *SettingsFirebaseRepository) SaveSettings(ctx context.Context, settings map[string]interface{}) error {
+	return r.client.Set(ctx, "app/settings", settings)
+}

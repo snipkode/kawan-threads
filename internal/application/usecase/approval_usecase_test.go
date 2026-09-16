@@ -161,12 +161,11 @@ var _ repository.HistoryRepository = (*memHistoryRepo)(nil)
 func newApprovalUC() (*ApprovalUseCase, *memStore) {
 	store := newMemStore()
 	return &ApprovalUseCase{
-		ContentRepo:  &memContentRepo{store},
-		VersionRepo:  &memVersionRepo{store},
-		QueueRepo:    &memQueueRepo{store},
-		HistoryRepo:  &memHistoryRepo{store},
-		Logger:       slog.Default(),
-		AutoApproval: false,
+		ContentRepo: &memContentRepo{store},
+		VersionRepo: &memVersionRepo{store},
+		QueueRepo:   &memQueueRepo{store},
+		HistoryRepo: &memHistoryRepo{store},
+		Logger:      slog.Default(),
 	}, store
 }
 

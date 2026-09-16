@@ -15,9 +15,10 @@ smart cadence — and learns from engagement to keep improving.
   thread series, hook variants, built-in quality validation.
 - **Human-in-the-loop approval** — generated content is *always* a DRAFT;
   nothing touches the queue until an admin approves it. Optional auto-approval.
-- **AMAB scheduler** — Autonomous Multi-Arm Bandit picks the best posting
-  window from historical engagement, enforces max posts/day, min interval,
-  pillar/topic diversity, and an exploration rate (0.20 default).
+- **AMAB scheduler** — the Adaptive Metrics-Based Algorithm picks the best
+  posting window from historical engagement (views/likes/replies/reposts),
+  balancing exploration vs exploitation, and enforces max posts/day,
+  min-interval, and priority rules. See `docs/architecture.md`.
 - **Reliable publishing** — idempotent Threads publishing with token
   persistence, retry with backoff, and rate-limit handling.
 - **Analytics feedback loop** — a worker collects post insights and feeds them
@@ -50,7 +51,9 @@ cmd/
   api/       HTTP API server (entry point)
   worker/    Background workers (scheduler, publisher, analytics)
 internal/
-  application/usecase/   Business logic (Content, Approval)
+  application/
+    runtimeconfig/          Runtime settings store (seed env → overlay UI edits)
+    usecase/                Business logic (Content, Approval)
   config/                .env + environment configuration
   domain/
     entity/              Core domain entities & enums
@@ -116,27 +119,33 @@ docker compose up -d --build
 
 ## Production configuration
 
-Set `DATA_STORE=firebase` and fill in the remaining keys in `.env`:
+Only the **datastore** and the **Firebase service account** (plus app infra:
+`PORT`, `APP_ENV`) are environment-locked. Everything else — Gemini API key &
+model, Threads credentials, scheduler timezone/interval, auto-approval,
+posting limits, exploration rate, retries — is seeded from the environment **and
+then editable at run time via the UI** (`GET/PUT /api/settings`), persisted in
+the datastore and shared with the worker process. Values edited in the UI take
+effect without a restart; the worker re-reads them on every tick.
 
-| Variable | Required | Description |
-|---------|----------|-------------|
-| `DATA_STORE` | — | `file` (dev) or `firebase` (prod). Default `firebase` via Go flag, `file` in compose. |
-| `DATA_FILE` | file mode | Path to the JSON datastore. Default `data/db.json`. |
-| `FIREBASE_DATABASE_URL` | firebase | e.g. `https://my-project.firebaseio.com` |
-| `FIREBASE_SERVICE_ACCOUNT_BASE64` | firebase | Base64-encoded service-account JSON |
-| `GEMINI_API_KEY` | AI | Enables generation |
-| `GEMINI_MODEL` | — | Default `gemini-1.5-flash` |
-| `THREADS_CLIENT_ID` / `THREADS_CLIENT_SECRET` / `THREADS_REDIRECT_URI` | publishing | Threads OAuth app |
-| `THREADS_ACCESS_TOKEN` / `THREADS_USER_ID` | publishing | Long-lived token + account |
-| `SCHEDULER_TIMEZONE` | — | Default `Asia/Jakarta` |
-| `SCHEDULER_INTERVAL_MINUTES` | — | Scheduler tick. Default `5` |
-| `AUTO_APPROVAL` | — | Skip the manual approval step. Default `false` |
-| `AUTO_PUBLISH` | — | Publish automatically at the scheduled time. Default `false` |
-| `MAX_POSTS_PER_DAY` | — | Daily posting cap. Default `5` |
-| `MIN_POST_INTERVAL_MINUTES` | — | Min spacing between posts. Default `90` |
-| `EXPLORATION_RATE` | — | AMAB exploration vs exploitation. Default `0.20` |
-| `MAX_RETRY` | — | Max publish attempts. Default `3` |
-| `PORT` / `APP_ENV` | — | API port / environment. Defaults `8080` / `development` |
+| Variable | Locked | Description |
+|---------|--------|-------------|
+| `DATA_STORE` | ✔ env | `file` (dev) or `firebase` (prod). Default `firebase` via Go flag, `file` in compose. |
+| `DATA_FILE` | ✔ env | Path to the JSON datastore. Default `data/db.json`. |
+| `FIREBASE_DATABASE_URL` | ✔ env | e.g. `https://my-project.firebaseio.com` |
+| `FIREBASE_SERVICE_ACCOUNT_BASE64` | ✔ env | Base64-encoded service-account JSON |
+| `GEMINI_API_KEY` | UI | Runtime — enables generation (key `gemini_api_key`) |
+| `GEMINI_MODEL` | UI | Runtime — default `gemini-1.5-flash` |
+| `THREADS_CLIENT_ID` / `CLIENT_SECRET` / `REDIRECT_URI` | UI | Runtime — Threads OAuth app |
+| `THREADS_ACCESS_TOKEN` / `USER_ID` | UI | Runtime — long-lived token + account (token also saved by OAuth callback) |
+| `SCHEDULER_TIMEZONE` | UI | Runtime — default `Asia/Jakarta` |
+| `SCHEDULER_INTERVAL_MINUTES` | UI | Runtime — scheduler tick, default `5` |
+| `AUTO_APPROVAL` | UI | Runtime — skip the manual approval step. Default `false` |
+| `AUTO_PUBLISH` | UI | Runtime — publish automatically. Default `false` |
+| `MAX_POSTS_PER_DAY` | UI | Runtime — daily posting cap. Default `5` |
+| `MIN_POST_INTERVAL_MINUTES` | UI | Runtime — min spacing. Default `90` |
+| `EXPLORATION_RATE` | UI | Runtime — AMAB exploration vs exploitation. Default `0.20` |
+| `MAX_RETRY` | UI | Runtime — max publish attempts. Default `3` |
+| `PORT` / `APP_ENV` | ✔ env | API port / environment. Defaults `8080` / `development` |
 | `VITE_API_BASE_URL` | — | Frontend API origin. Default `http://localhost:8080` |
 
 > Secrets are loaded by the **backend only**. Never prefix a secret with
@@ -171,7 +180,8 @@ All responses use a consistent envelope: `{"success": true, "data": ...}` or
 | GET | `/api/analytics/hour` | Best publishing hours |
 | GET | `/api/analytics/pillar` | Performance per pillar |
 | GET | `/api/topics` · POST | Topic seeds |
-| GET | `/api/settings` · PUT | Platform settings |
+| GET | `/api/settings` · PUT | Platform settings (runtime-editable, persisted) |
+| GET | `/api/settings/status` | Datastore + Gemini/Threads configuration state |
 | GET | `/api/auth/threads` | Redirect to Threads OAuth |
 | GET | `/api/auth/threads/callback` | OAuth callback |
 

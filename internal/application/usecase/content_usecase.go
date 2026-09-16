@@ -17,12 +17,11 @@ import (
 
 // ContentUseCase orchestrates content generation and editing.
 type ContentUseCase struct {
-	ContentRepo  repository.ContentRepository
-	VersionRepo  repository.ContentVersionRepository
-	HistoryRepo  repository.HistoryRepository
-	AIProvider   port.AIProvider
-	Logger       *slog.Logger
-	AutoApproval bool
+	ContentRepo repository.ContentRepository
+	VersionRepo repository.ContentVersionRepository
+	HistoryRepo repository.HistoryRepository
+	AIProvider  port.AIProvider
+	Logger      *slog.Logger
 }
 
 // EditContentRequest holds the fields an admin can change.

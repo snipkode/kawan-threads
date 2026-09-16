@@ -24,12 +24,11 @@ var (
 
 // ApprovalUseCase encapsulates all approval-flow business logic.
 type ApprovalUseCase struct {
-	ContentRepo  repository.ContentRepository
-	VersionRepo  repository.ContentVersionRepository
-	QueueRepo    repository.QueueRepository
-	HistoryRepo  repository.HistoryRepository
-	Logger       *slog.Logger
-	AutoApproval bool
+	ContentRepo repository.ContentRepository
+	VersionRepo repository.ContentVersionRepository
+	QueueRepo   repository.QueueRepository
+	HistoryRepo repository.HistoryRepository
+	Logger      *slog.Logger
 }
 
 // ContentPreview is the combined view returned by GetApprovalPreview.

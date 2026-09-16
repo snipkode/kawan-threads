@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"kawan-threads/internal/application/runtimeconfig"
 	"kawan-threads/internal/config"
 	"kawan-threads/internal/domain/repository"
 	"kawan-threads/internal/infrastructure/filestore"
@@ -54,6 +55,7 @@ func main() {
 	var publishedPostRepo repository.PublishedPostRepository
 	var performanceRepo repository.PostPerformanceRepository
 	var historyRepo repository.HistoryRepository
+	var settingsRepo repository.SettingsRepository
 
 	switch cfg.Store.DataStore {
 	case "file":
@@ -69,6 +71,7 @@ func main() {
 		publishedPostRepo = fs.PublishedPost
 		performanceRepo = fs.Performance
 		historyRepo = fs.History
+		settingsRepo = fs.Settings
 
 	default: // firebase
 		firebaseClient, err := firebase.NewFirebaseClient(cfg)
@@ -82,16 +85,28 @@ func main() {
 		publishedPostRepo = firebase.NewPublishedPostRepository(firebaseClient)
 		performanceRepo = firebase.NewPostPerformanceRepository(firebaseClient)
 		historyRepo = firebase.NewHistoryRepository(firebaseClient)
+		settingsRepo = firebase.NewSettingsRepository(firebaseClient)
 	}
 
 	// -------------------------------------------------------------------------
-	// Threads adapter (optional)
+	// Runtime configuration — shared with the API process through the
+	// datastore; the scheduler/publisher/analytics workers reload settings on
+	// every tick so UI changes apply without restarting this process.
 	// -------------------------------------------------------------------------
-	var threadsAdapter *threads.ThreadsAdapter
-	if cfg.Threads.ClientID != "" && cfg.Threads.UserID != "" {
-		threadsAdapter = threads.NewThreadsAdapter(cfg, log)
+	runtimeCfg := runtimeconfig.New(settingsRepo, cfg, log)
+	runtimeCfg.Load(context.Background())
+
+	// -------------------------------------------------------------------------
+	// Threads adapter — always constructed; workers self-gate on credentials.
+	// -------------------------------------------------------------------------
+	threadsAdapter := threads.NewThreadsAdapter(runtimeCfg, log)
+	if runtimeCfg.ThreadsConfigured() {
+		log.Info("threads adapter configured via runtime settings",
+			"user_id", runtimeCfg.Str("threads_user_id", ""),
+			"connected", runtimeCfg.ThreadsConnected(),
+		)
 	} else {
-		log.Info("Threads credentials not set — publishing & analytics workers idle")
+		log.Info("Threads credentials not set — publishing & analytics workers will idle until configured in Settings")
 	}
 
 	// -------------------------------------------------------------------------
@@ -105,7 +120,7 @@ func main() {
 	// -------------------------------------------------------------------------
 	// AMAB Scheduler — moves QUEUED → SCHEDULED
 	// -------------------------------------------------------------------------
-	sch := scheduler.NewScheduler(cfg, queueRepo, scheduleRepo, contentRepo, historyRepo, performanceRepo, log)
+	sch := scheduler.NewScheduler(runtimeCfg, queueRepo, scheduleRepo, contentRepo, historyRepo, performanceRepo, log)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -113,43 +128,38 @@ func main() {
 	}()
 
 	// -------------------------------------------------------------------------
-	// Publisher — moves SCHEDULED → PUBLISHED via the Threads API
+	// Publisher — moves SCHEDULED → PUBLISHED via the Threads API. It starts
+	// unconditionally and self-gates on runtime Threads credentials.
 	// -------------------------------------------------------------------------
-	if threadsAdapter != nil {
-		pub := publishing.NewPublisher(cfg, contentRepo, scheduleRepo, publishedPostRepo, historyRepo, threadsAdapter, log)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			pub.Run(ctx)
-		}()
-	} else {
-		log.Warn("threads adapter unavailable — publisher worker not started")
-	}
+	pub := publishing.NewPublisher(runtimeCfg, contentRepo, scheduleRepo, publishedPostRepo, historyRepo, threadsAdapter, log)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		pub.Run(ctx)
+	}()
 
 	// -------------------------------------------------------------------------
 	// Analytics worker — collects insights → AMAB feedback loop
 	// -------------------------------------------------------------------------
-	if threadsAdapter != nil {
-		aw, err := analytics.NewWorker(analytics.WorkerOptions{
-			PublishedRepo:    publishedPostRepo,
-			ContentRepo:      contentRepo,
-			PerformanceRepo:  performanceRepo,
-			HistoryRepo:      historyRepo,
-			ThreadsPort:      threadsAdapter,
-			UserID:           threadsAdapter.UserID(),
-			Logger:           log,
-			TickInterval:     10 * time.Minute,
-			ProcessBatchSize: 10,
-		})
-		if err != nil {
-			log.Error("failed to start analytics worker", "error", err)
-		} else {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				aw.Run(ctx)
-			}()
-		}
+	aw, err := analytics.NewWorker(analytics.WorkerOptions{
+		PublishedRepo:    publishedPostRepo,
+		ContentRepo:      contentRepo,
+		PerformanceRepo:  performanceRepo,
+		HistoryRepo:      historyRepo,
+		ThreadsPort:      threadsAdapter,
+		UserID:           threadsAdapter.UserID(),
+		Logger:           log,
+		TickInterval:     10 * time.Minute,
+		ProcessBatchSize: 10,
+	})
+	if err != nil {
+		log.Error("failed to start analytics worker", "error", err)
+	} else {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			aw.Run(ctx)
+		}()
 	}
 
 	// -------------------------------------------------------------------------

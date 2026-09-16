@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"kawan-threads/internal/config"
+	"kawan-threads/internal/application/runtimeconfig"
 	"kawan-threads/internal/domain/port"
 )
 
@@ -48,34 +48,65 @@ func (e *RateLimitError) Error() string {
 // ---------------------------------------------------------------------------
 
 // ThreadsAdapter implements port.ThreadsPort using the official Threads API.
+// All credentials are read from the runtime settings store so they can be
+// configured through the UI — including the access token, which the OAuth
+// callback persists after a successful exchange.
 type ThreadsAdapter struct {
-	clientID     string
-	clientSecret string
-	redirectURI  string
-	accessToken  string
-	userID       string
-	httpClient   *http.Client
-	logger       *slog.Logger
+	settings   *runtimeconfig.Store
+	httpClient *http.Client
+	logger     *slog.Logger
 }
 
-// UserID returns the configured Threads user ID.
-func (a *ThreadsAdapter) UserID() string {
-	return a.userID
-}
-
-// NewThreadsAdapter constructs a ThreadsAdapter from application config.
-func NewThreadsAdapter(cfg *config.Config, logger *slog.Logger) *ThreadsAdapter {
+// NewThreadsAdapter constructs a ThreadsAdapter backed by the runtime settings.
+func NewThreadsAdapter(settings *runtimeconfig.Store, logger *slog.Logger) *ThreadsAdapter {
 	return &ThreadsAdapter{
-		clientID:     cfg.Threads.ClientID,
-		clientSecret: cfg.Threads.ClientSecret,
-		redirectURI:  cfg.Threads.RedirectURI,
-		accessToken:  cfg.Threads.AccessToken,
-		userID:       cfg.Threads.UserID,
+		settings: settings,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 		logger: logger,
 	}
+}
+
+// UserID returns the configured Threads user ID.
+func (a *ThreadsAdapter) UserID() string {
+	return a.settings.Str(runtimeconfig.ThreadsUserID, "")
+}
+
+// Configured reports whether the minimum credentials (client ID + user ID)
+// are present to perform Threads API calls.
+func (a *ThreadsAdapter) Configured() bool {
+	return a.settings.Str(runtimeconfig.ThreadsClientID, "") != "" &&
+		a.settings.Str(runtimeconfig.ThreadsUserID, "") != ""
+}
+
+// Connected reports whether an access token has been saved.
+func (a *ThreadsAdapter) Connected() bool {
+	return a.settings.Str(runtimeconfig.ThreadsAccessToken, "") != ""
+}
+
+// SaveAccessToken persists a (new or refreshed) access token through the
+// runtime settings store.
+func (a *ThreadsAdapter) SaveAccessToken(ctx context.Context, token string) error {
+	if token == "" {
+		return fmt.Errorf("threads: refusing to store an empty access token")
+	}
+	_, err := a.settings.Update(ctx, map[string]interface{}{runtimeconfig.ThreadsAccessToken: token})
+	if err != nil {
+		return fmt.Errorf("threads: persisting access token: %w", err)
+	}
+	return nil
+}
+
+func (a *ThreadsAdapter) clientID() string { return a.settings.Str(runtimeconfig.ThreadsClientID, "") }
+func (a *ThreadsAdapter) clientSecret() string {
+	return a.settings.Str(runtimeconfig.ThreadsClientSecret, "")
+}
+func (a *ThreadsAdapter) redirectURI() string {
+	return a.settings.Str(runtimeconfig.ThreadsRedirectURI, "")
+}
+func (a *ThreadsAdapter) accessToken() string {
+	return a.settings.Str(runtimeconfig.ThreadsAccessToken, "")
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +123,7 @@ func (a *ThreadsAdapter) CreateTextContainer(ctx context.Context, userID string,
 	params := url.Values{}
 	params.Set("media_type", "TEXT")
 	params.Set("text", text)
-	params.Set("access_token", a.accessToken)
+	params.Set("access_token", a.accessToken())
 
 	resp, err := a.postForm(ctx, endpoint, params)
 	if err != nil {
@@ -111,7 +142,7 @@ func (a *ThreadsAdapter) PublishContainer(ctx context.Context, userID string, cr
 
 	params := url.Values{}
 	params.Set("creation_id", creationID)
-	params.Set("access_token", a.accessToken)
+	params.Set("access_token", a.accessToken())
 
 	resp, err := a.postForm(ctx, endpoint, params)
 	if err != nil {
@@ -128,7 +159,7 @@ func (a *ThreadsAdapter) PublishContainer(ctx context.Context, userID string, cr
 func (a *ThreadsAdapter) GetPostInsights(ctx context.Context, _ string, postID string) (*port.ThreadsInsights, error) {
 	q := url.Values{}
 	q.Set("metric", "views,likes,replies,reposts,quotes")
-	q.Set("access_token", a.accessToken)
+	q.Set("access_token", a.accessToken())
 
 	endpoint := fmt.Sprintf("%s/%s/insights?%s", apiBase, postID, q.Encode())
 
@@ -183,8 +214,8 @@ func (a *ThreadsAdapter) GetPostInsights(ctx context.Context, _ string, postID s
 // to authorize the application.
 func (a *ThreadsAdapter) GetAuthURL() string {
 	params := url.Values{}
-	params.Set("client_id", a.clientID)
-	params.Set("redirect_uri", a.redirectURI)
+	params.Set("client_id", a.clientID())
+	params.Set("redirect_uri", a.redirectURI())
 	params.Set("scope", "threads_basic,threads_content_publish,threads_read_replies,threads_manage_insights")
 	params.Set("response_type", "code")
 	return fmt.Sprintf("%s?%s", authBase, params.Encode())
@@ -330,10 +361,10 @@ func (a *ThreadsAdapter) doRequest(req *http.Request) ([]byte, error) {
 // short-lived access token.
 func (a *ThreadsAdapter) exchangeShortLivedToken(ctx context.Context, code string) (string, error) {
 	params := url.Values{}
-	params.Set("client_id", a.clientID)
-	params.Set("client_secret", a.clientSecret)
+	params.Set("client_id", a.clientID())
+	params.Set("client_secret", a.clientSecret())
 	params.Set("grant_type", "authorization_code")
-	params.Set("redirect_uri", a.redirectURI)
+	params.Set("redirect_uri", a.redirectURI())
 	params.Set("code", code)
 
 	req, err := http.NewRequestWithContext(
@@ -370,7 +401,7 @@ func (a *ThreadsAdapter) exchangeShortLivedToken(ctx context.Context, code strin
 func (a *ThreadsAdapter) exchangeLongLivedToken(ctx context.Context, shortToken string) (string, error) {
 	q := url.Values{}
 	q.Set("grant_type", "th_exchange_token")
-	q.Set("client_secret", a.clientSecret)
+	q.Set("client_secret", a.clientSecret())
 	q.Set("access_token", shortToken)
 
 	endpoint := fmt.Sprintf("https://graph.threads.net/access_token?%s", q.Encode())

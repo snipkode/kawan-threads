@@ -265,3 +265,49 @@ func TestConcurrentAccessIsSafe(t *testing.T) {
 		t.Fatalf("concurrent len = %d, want 20", len(all))
 	}
 }
+
+func TestSettingsRepository_PersistsAcrossInstances(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "db.json")
+	ctx := context.Background()
+
+	s1, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := s1.Settings.SaveSettings(ctx, map[string]interface{}{
+		"gemini_api_key":    "sk-123",
+		"max_posts_per_day": 12.0,
+		"auto_approval":     true,
+	}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	// A second instance (simulating the worker) must read the same values.
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open 2: %v", err)
+	}
+	got, err := s2.Settings.GetSettings(ctx)
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if got["gemini_api_key"] != "sk-123" {
+		t.Fatalf("gemini key = %v, want sk-123", got["gemini_api_key"])
+	}
+	if got["max_posts_per_day"] != 12.0 {
+		t.Fatalf("max posts = %v, want 12", got["max_posts_per_day"])
+	}
+	if got["auto_approval"] != true {
+		t.Fatalf("auto_approval = %v, want true", got["auto_approval"])
+	}
+
+	// Overwrite fully replaces the settings node.
+	replaced := map[string]interface{}{"gemini_api_key": "new-key"}
+	if err := s1.Settings.SaveSettings(ctx, replaced); err != nil {
+		t.Fatalf("SaveSettings replace: %v", err)
+	}
+	got2, _ := s1.Settings.GetSettings(ctx)
+	if len(got2) != 1 || got2["gemini_api_key"] != "new-key" {
+		t.Fatalf("replace result = %v, want only new-key", got2)
+	}
+}

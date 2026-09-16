@@ -78,36 +78,115 @@ Started as three goroutines sharing one root context:
 | Publisher (`publishing.Run`) | Due `SCHEDULED` items | `PublishedPost`, content `→PUBLISHED`/`FAILED` |
 | Analytics (`analytics.Run`) | Published posts lacking insights | `PostPerformance` records |
 
-`cmd/worker` starts the scheduler unconditionally; the publisher and analytics
-workers only start when Threads credentials are configured.
+All three workers start unconditionally but **self-gate** on the runtime
+Threads/Gemini configuration — the publisher and analytics idles until
+credentials are present in settings, so credentials can be added later from the
+UI without restarting the process.
 
-## AMAB scheduler
+## Runtime configuration
 
-`internal/infrastructure/scheduler` implements the **Autonomous Multi-Arm
-Bandit** posting algorithm.
+Config splits into two classes:
 
-### Strategy recommendation
+- **Environment-locked** (only `cmd` processes read these): `DATA_STORE`,
+  `DATA_FILE`, `FIREBASE_DATABASE_URL`, `FIREBASE_SERVICE_ACCOUNT_BASE64`,
+  `PORT`, `APP_ENV`.
+- **Runtime** (`internal/application/runtimeconfig`): Gemini key/model, Threads
+  OAuth credentials & token, scheduler timezone/interval, auto-approval/
+  auto-publish, posting caps, exploration rate, retry. Seeded from the
+  environment at boot (`Store.Load`), then overlaid with values persisted in the
+  datastore via the `SettingsRepository` (filestore node `settings` /
+  firebase path `app/settings`).
 
-`AMABScorer.GetStrategyRecommendation` categorises each pillar based on its
-engagement rate:
+Flow:
 
-| Rate < past-avg | Category | Action |
-|-----------------|----------|--------|
-| fd < 0.7        | Struggling | Add new pillars/topics (novelty) |
-| 0.7 ≤ fd ≤ 1.0  | Stable    | Continue with slight variation |
-| fd > 1.0        | Strong    | Increase posting frequency (+10%) and assignment weight |
+1. API boots → `runtimeconfig.New(settingsRepo, envCfg)` + `Load()` merges
+   persisted overrides on top of the env seed.
+2. User edits a section in the UI → `PUT /api/settings` → `Update()` normalises
+   types (e.g. string `"12"` → int, clamps exploration to `[0,1]`), persists the
+   full snapshot, and the in-memory overlay updates immediately.
+3. `cmd/worker` builds its own store; every worker tick calls `Store.Reload()`
+   so API-side edits apply without a worker restart.
+4. Gemini adapter reads the key/model per request; the Threads adapter reads all
+   credentials per call. `GET /api/settings/status` reports live
+   configured/connected state for the UI.
+5. Locked keys (`data_store`, `app_env`, `db_url`, `sa_configured`) are ignored
+   in `Update()` — they can never be overridden from the UI.
 
-`RecommendStrategy` combines the categorical index with the exploration rate
-(`EXPLORATION_RATE`, default 0.20) into the final top-2 strategy list.
+## AMAB algorithm
 
-### Posting-window selection
+`internal/infrastructure/scheduler` implements **AMAB — the Adaptive
+Metrics-Based Algorithm** (not to be confused with a classic multi-armed
+bandit; it is a bandit-*style* exploration/exploitation scheduler tuned for
+social posting). It decides **when** to post by balancing *exploitation*
+(repeating proven high-engagement time slots) with *exploration* (trying
+under-tested slots to gather fresh signal). The loop is closed by the
+analytics worker, so every published post makes future decisions smarter.
 
-- Scores candidate slots using historical engagement per weekday/hour
-  (`performance_score`).
-- Additionally applies diversity (recent pillars/topics), duplicate-topic
-  exclusion, and the min-interval guard before committing to a window.
-- Runs at most once per tick (`break` after the first accepted item) for a
-  predictable cadence.
+### Candidate windows
+
+`defaultPostingWindows` defines the slots evaluated in the configured timezone:
+`07:00`, `12:00`, `16:30`, `19:30`, `21:00`. Selection considers **today and
+tomorrow**, keeping only windows in the future.
+
+### 1. Slot scoring (`AMABScorer.Score`)
+
+For each candidate hour, the scorer loads every `PostPerformance` record for
+the matching pillar published within **±1 hour** of that slot, then:
+
+- **Exploration mode (cold start):** if fewer than **3 samples** exist, the
+  slot returns a random score in **[0.5, 1.0]** so under-tested slots still
+  get a fair chance.
+- **Exploitation mode (warm):** each sample is normalised against the dataset
+  maximum and weighted:
+  `score = views*0.30 + replies*0.30 + reposts*0.20 + quotes*0.20`
+  Recency weight favours fresh data (≤7d → ×1.5, ≤30d → ×1.2, older → ×1.0),
+  and the average is scaled by sample confidence `min(1, n/10)` so small
+  samples are never fully trusted.
+
+### 2. Window selection (`AMABScorer.SelectPostingWindow`)
+
+- With probability **`EXPLORATION_RATE`** (default **0.20**) a random future
+  window is chosen.
+- Otherwise the **highest-scored** window wins (greedy exploitation).
+- If no candidate remains today or tomorrow, it falls back to the first slot
+  two days out — guaranteeing the queue always make progress.
+
+### 3. Strategy recommendation (`GetStrategyRecommendation`)
+
+Aggregates all performance data by **pillar**, **hook type**, and **hour** to
+produce a monthly/periodic report used by admins and the analytics worker:
+top pillar, top hook type, top-3 best hours, and an automatic suggested action
+based on the dominant engagement signal (high reply rate → more conversational
+content; high repost rate → more shareable/utility content; low views →
+experiment with hooks; otherwise keep the current strategy).
+
+### 4. Guard rails in the scheduling loop (`Scheduler.processQueue`)
+
+Whether a queued item actually gets scheduled depends on more than the score:
+
+- Queue is processed in **priority DESC** order (events=100, membership=80,
+  default=50).
+- **Max posts/day** (`MAX_POSTS_PER_DAY`) — the daily cap is checked before
+  scheduling.
+- **Min interval** (`MIN_POST_INTERVAL_MINUTES`) — every existing schedule must
+  be farther away than the configured minimum from the submission time.
+- **One schedule per tick** — the loop schedules at most a single item, then
+  breaks for a predictable cadence.
+- Diversity checks (recent pillars/topics) exist at the API boundary of the
+  scorer; today `CheckContentDiversity` and `hasDuplicateTopic` are
+  conservative stubs, so the practical constraints are the priority, daily
+  cap, min-interval, and one-per-tick rules above.
+
+### Configuration knobs
+
+| Knob | Env | Effect |
+|------|-----|--------|
+| `EXPLORATION_RATE` | default `0.20` | % of decisions that explore instead of exploit |
+| `MAX_POSTS_PER_DAY` | default `5` | Hard daily posting cap |
+| `MIN_POST_INTERVAL_MINUTES` | default `90` | Min gap between any two posts |
+| `SCHEDULER_TIMEZONE` | default `Asia/Jakarta` | Posting window timezone |
+
+See `internal/infrastructure/scheduler/amab.go` for the full implementation.
 
 ## Publisher
 

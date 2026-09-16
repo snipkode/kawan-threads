@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"kawan-threads/internal/config"
+	"kawan-threads/internal/application/runtimeconfig"
 	"kawan-threads/internal/domain/entity"
 	"kawan-threads/internal/domain/repository"
 	applogger "kawan-threads/internal/logger"
@@ -23,15 +23,19 @@ type Scheduler struct {
 	HistoryRepo     repository.HistoryRepository
 	AMABScorer      *AMABScorer
 	Logger          *slog.Logger
+	Settings        *runtimeconfig.Store
 	Timezone        *time.Location
 	MaxPostsPerDay  int
 	MinPostInterval time.Duration
 	Interval        time.Duration
 }
 
-// NewScheduler creates a Scheduler wired with all dependencies.
+// NewScheduler creates a Scheduler wired with all dependencies. Behavioural
+// knobs (timezone, daily cap, min interval, exploration rate, tick interval)
+// are read from the runtime settings store and refreshed on every tick, so UI
+// changes apply without restarting the worker.
 func NewScheduler(
-	cfg *config.Config,
+	settings *runtimeconfig.Store,
 	queueRepo repository.QueueRepository,
 	scheduleRepo repository.ScheduleRepository,
 	contentRepo repository.ContentRepository,
@@ -39,16 +43,33 @@ func NewScheduler(
 	perfRepo repository.PostPerformanceRepository,
 	logger *slog.Logger,
 ) *Scheduler {
-	tz, err := time.LoadLocation(cfg.Scheduler.Timezone)
+	timezone := "Asia/Jakarta"
+	if settings != nil {
+		timezone = settings.Str(runtimeconfig.SchedulerTimezone, timezone)
+	}
+	tz, err := time.LoadLocation(timezone)
 	if err != nil {
-		logger.Warn("invalid timezone, using UTC", "timezone", cfg.Scheduler.Timezone)
+		logger.Warn("invalid timezone, using UTC", "timezone", timezone)
 		tz = time.UTC
 	}
-	scorer := NewAMABScorer(perfRepo, logger, cfg.Settings.ExplorationRate)
-	interval := time.Duration(cfg.Scheduler.IntervalMinutes) * time.Minute
+
+	scorer := NewAMABScorer(perfRepo, logger, 0.20)
+	if settings != nil {
+		scorer.ExplorationRate = settings.Float(runtimeconfig.ExplorationRate, 0.20)
+	}
+
+	interval := 5 * time.Minute
+	maxPerDay := 5
+	minPostInterval := 90 * time.Minute
+	if settings != nil {
+		interval = time.Duration(settings.Int(runtimeconfig.SchedulerIntervalMinutes, 5)) * time.Minute
+		maxPerDay = settings.Int(runtimeconfig.MaxPostsPerDay, 5)
+		minPostInterval = time.Duration(settings.Int(runtimeconfig.MinPostIntervalMinutes, 90)) * time.Minute
+	}
 	if interval <= 0 {
 		interval = 5 * time.Minute
 	}
+
 	return &Scheduler{
 		QueueRepo:       queueRepo,
 		ScheduleRepo:    scheduleRepo,
@@ -56,26 +77,54 @@ func NewScheduler(
 		HistoryRepo:     historyRepo,
 		AMABScorer:      scorer,
 		Logger:          logger,
+		Settings:        settings,
 		Timezone:        tz,
-		MaxPostsPerDay:  cfg.Settings.MaxPostsPerDay,
-		MinPostInterval: time.Duration(cfg.Settings.MinPostIntervalMinutes) * time.Minute,
+		MaxPostsPerDay:  maxPerDay,
+		MinPostInterval: minPostInterval,
 		Interval:        interval,
 	}
 }
 
-// Run starts the scheduling loop, ticking every configured interval
-// (SCHEDULER_INTERVAL_MINUTES; defaults to 5 minutes).
+// refreshFromSettings re-reads the latest persisted settings (the worker
+// reloads from disk on every tick, so it sees API/UI changes) and applies
+// them to the live scheduler.
+func (s *Scheduler) refreshFromSettings(ctx context.Context) {
+	if s.Settings == nil {
+		return
+	}
+	s.Settings.Reload(ctx)
+	if tz, err := time.LoadLocation(s.Settings.Str(runtimeconfig.SchedulerTimezone, "Asia/Jakarta")); err == nil {
+		s.Timezone = tz
+	}
+	s.MaxPostsPerDay = s.Settings.Int(runtimeconfig.MaxPostsPerDay, s.MaxPostsPerDay)
+	s.MinPostInterval = time.Duration(s.Settings.Int(runtimeconfig.MinPostIntervalMinutes, 90)) * time.Minute
+	s.AMABScorer.ExplorationRate = s.Settings.Float(runtimeconfig.ExplorationRate, s.AMABScorer.ExplorationRate)
+}
+
+// currentInterval returns the effective tick interval, reading the value from
+// the runtime settings so SCHEDULER_INTERVAL_MINUTES can change through the
+// UI too.
+func (s *Scheduler) currentInterval() time.Duration {
+	if s.Settings != nil {
+		if minutes := s.Settings.Int(runtimeconfig.SchedulerIntervalMinutes, int(s.Interval.Minutes())); minutes > 0 {
+			return time.Duration(minutes) * time.Minute
+		}
+	}
+	return s.Interval
+}
+
+// Run starts the scheduling loop. The interval, timezone, daily cap and other
+// knobs are re-read from the runtime settings on every tick.
 func (s *Scheduler) Run(ctx context.Context) {
-	s.Logger.Info("scheduler worker started", "interval", s.Interval.String(), "timezone", s.Timezone.String())
-	ticker := time.NewTicker(s.Interval)
-	defer ticker.Stop()
+	s.Logger.Info("scheduler worker started", "interval", s.currentInterval().String(), "timezone", s.Timezone.String())
 
 	for {
 		select {
 		case <-ctx.Done():
 			s.Logger.Info("scheduler worker stopping")
 			return
-		case <-ticker.C:
+		case <-time.After(s.currentInterval()):
+			s.refreshFromSettings(ctx)
 			applogger.LogEvent(s.Logger, applogger.EventSchedulerTriggered)
 			if err := s.processQueue(ctx); err != nil {
 				s.Logger.Error("scheduler: processQueue failed", "error", err)

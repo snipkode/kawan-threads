@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"kawan-threads/internal/application/runtimeconfig"
 	"kawan-threads/internal/application/usecase"
 	"kawan-threads/internal/config"
 	"kawan-threads/internal/domain/port"
@@ -58,6 +59,7 @@ func main() {
 	var topicRepo repository.TopicRepository
 	var historyRepo repository.HistoryRepository
 	var experimentRepo repository.ExperimentRepository
+	var settingsRepo repository.SettingsRepository
 
 	switch cfg.Store.DataStore {
 	case "file":
@@ -76,6 +78,7 @@ func main() {
 		topicRepo = fs.Topic
 		historyRepo = fs.History
 		experimentRepo = fs.Experiment
+		settingsRepo = fs.Settings
 
 	default: // firebase
 		firebaseClient, err := firebase.NewFirebaseClient(cfg)
@@ -92,73 +95,73 @@ func main() {
 		topicRepo = firebase.NewTopicRepository(firebaseClient)
 		historyRepo = firebase.NewHistoryRepository(firebaseClient)
 		experimentRepo = firebase.NewExperimentRepository(firebaseClient)
+		settingsRepo = firebase.NewSettingsRepository(firebaseClient)
 	}
 
 	_ = publishedPostRepo // kept for parity with the publishing worker surface
 	_ = experimentRepo    // reserved for A/B testing support
 
 	// -------------------------------------------------------------------------
-	// AI Provider (optional — Gemini; nil if not configured)
+	// Runtime configuration — most settings are UI-editable via /api/settings
+	// and shared with the worker through the datastore. Only the datastore and
+	// Firebase service account remain environment-only.
 	// -------------------------------------------------------------------------
-	var aiProvider *gemini.GeminiAdapter
-	if cfg.Gemini.APIKey != "" {
-		var err error
-		aiProvider, err = gemini.NewGeminiAdapter(cfg, log)
-		if err != nil {
-			log.Error("gemini adapter init failed (running without AI)", "error", err)
-		} else {
-			log.Info("gemini adapter initialised", "model", cfg.Gemini.Model)
-		}
+	runtimeCfg := runtimeconfig.New(settingsRepo, cfg, log)
+	runtimeCfg.Load(context.Background())
+
+	aiConfigured := runtimeCfg.GeminiConfigured()
+	threadsConfigured := runtimeCfg.ThreadsConfigured()
+	threadsConnected := runtimeCfg.ThreadsConnected()
+
+	// -------------------------------------------------------------------------
+	// AI Provider (Gemini) — reads credentials from the runtime settings, so
+	// it can be (re)configured through the UI without a restart.
+	// -------------------------------------------------------------------------
+	aiProvider := gemini.NewGeminiAdapter(runtimeCfg, log)
+	if aiConfigured {
+		log.Info("gemini adapter initialised", "model", runtimeCfg.Str("gemini_model", ""), "managed_via_ui", true)
 	} else {
-		log.Info("GEMINI_API_KEY not set — AI generation unavailable")
+		log.Info("Gemini has no API key — AI generation unavailable until set in Settings")
 	}
 
 	// -------------------------------------------------------------------------
-	// Threads Adapter (optional)
+	// Threads Adapter — always constructed; credentials come from runtime
+	// settings. Publishing/analytics workers self-gate on configuration.
 	// -------------------------------------------------------------------------
-	var threadsAdapter *threads.ThreadsAdapter
-	if cfg.Threads.ClientID != "" && cfg.Threads.UserID != "" {
-		threadsAdapter = threads.NewThreadsAdapter(cfg, log)
-		log.Info("threads adapter initialised", "user_id", cfg.Threads.UserID)
+	threadsAdapter := threads.NewThreadsAdapter(runtimeCfg, log)
+	if threadsConfigured {
+		log.Info("threads adapter configured",
+			"user_id", runtimeCfg.Str("threads_user_id", ""),
+			"connected", threadsConnected,
+			"managed_via_ui", true,
+		)
 	} else {
-		log.Info("Threads credentials not set — Threads integration unavailable")
+		log.Info("Threads has no client credentials — set them in Settings to connect")
 	}
 
 	// -------------------------------------------------------------------------
 	// Use Cases
 	// -------------------------------------------------------------------------
 	contentUC := &usecase.ContentUseCase{
-		ContentRepo:  contentRepo,
-		VersionRepo:  contentVersionRepo,
-		HistoryRepo:  historyRepo,
-		AIProvider:   aiProvider,
-		Logger:       log,
-		AutoApproval: cfg.Settings.AutoApproval,
+		ContentRepo: contentRepo,
+		VersionRepo: contentVersionRepo,
+		HistoryRepo: historyRepo,
+		AIProvider:  aiProvider,
+		Logger:      log,
 	}
 
 	approvalUC := &usecase.ApprovalUseCase{
-		ContentRepo:  contentRepo,
-		VersionRepo:  contentVersionRepo,
-		QueueRepo:    queueRepo,
-		HistoryRepo:  historyRepo,
-		Logger:       log,
-		AutoApproval: cfg.Settings.AutoApproval,
+		ContentRepo: contentRepo,
+		VersionRepo: contentVersionRepo,
+		QueueRepo:   queueRepo,
+		HistoryRepo: historyRepo,
+		Logger:      log,
 	}
 
 	// -------------------------------------------------------------------------
 	// Handlers
 	// -------------------------------------------------------------------------
 	base := handler.NewBaseHandler(log, contentRepo, queueRepo, scheduleRepo, performanceRepo, topicRepo, historyRepo)
-
-	initialSettings := map[string]interface{}{
-		"auto_approval":             cfg.Settings.AutoApproval,
-		"auto_publish":              cfg.Settings.AutoPublish,
-		"max_posts_per_day":         cfg.Settings.MaxPostsPerDay,
-		"min_post_interval_minutes": cfg.Settings.MinPostIntervalMinutes,
-		"exploration_rate":          cfg.Settings.ExplorationRate,
-		"max_retry":                 cfg.Settings.MaxRetry,
-		"timezone":                  cfg.Scheduler.Timezone,
-	}
 
 	var threadsPort port.ThreadsPort
 	if threadsAdapter != nil {
@@ -173,7 +176,7 @@ func main() {
 		Schedule:  handler.NewScheduleHandler(base),
 		Analytics: handler.NewAnalyticsHandler(base),
 		Topic:     handler.NewTopicHandler(base),
-		Settings:  handler.NewSettingsHandler(base, initialSettings),
+		Settings:  handler.NewSettingsHandler(base, runtimeCfg),
 		Auth:      handler.NewAuthHandler(threadsPort),
 	}
 

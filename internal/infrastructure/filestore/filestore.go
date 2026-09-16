@@ -44,6 +44,7 @@ type database struct {
 	Topics      map[string]entity.Topic           `json:"topics"`
 	History     map[string]entity.History         `json:"history"`
 	Experiments map[string]entity.Experiment      `json:"experiments"`
+	Settings    map[string]interface{}            `json:"settings"`
 }
 
 func newDatabase() *database {
@@ -57,6 +58,7 @@ func newDatabase() *database {
 		Topics:      map[string]entity.Topic{},
 		History:     map[string]entity.History{},
 		Experiments: map[string]entity.Experiment{},
+		Settings:    map[string]interface{}{},
 	}
 }
 
@@ -76,6 +78,7 @@ type Store struct {
 	Topic          *TopicRepository
 	History        *HistoryRepository
 	Experiment     *ExperimentRepository
+	Settings       *SettingsRepository
 }
 
 // Open loads (or creates) the file-backed store at path. It is safe to call
@@ -96,6 +99,7 @@ func Open(path string) (*Store, error) {
 	s.Topic = &TopicRepository{s: s}
 	s.History = &HistoryRepository{s: s}
 	s.Experiment = &ExperimentRepository{s: s}
+	s.Settings = &SettingsRepository{s: s}
 
 	return s, nil
 }
@@ -128,6 +132,9 @@ func (s *Store) ensureCollections() {
 	}
 	if s.db.Experiments == nil {
 		s.db.Experiments = map[string]entity.Experiment{}
+	}
+	if s.db.Settings == nil {
+		s.db.Settings = map[string]interface{}{}
 	}
 }
 
@@ -851,6 +858,43 @@ func (r *ExperimentRepository) FindAll(_ context.Context) ([]*entity.Experiment,
 		return result[i].StartedAt.Before(result[j].StartedAt)
 	})
 	return result, nil
+}
+
+// ---------------------------------------------------------------------------
+// SettingsRepository
+// ---------------------------------------------------------------------------
+
+type SettingsRepository struct{ s *Store }
+
+// GetSettings returns a deep copy of the persisted runtime settings.
+func (r *SettingsRepository) GetSettings(_ context.Context) (map[string]interface{}, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	db, err := r.s.snapshot()
+	if err != nil {
+		return nil, err
+	}
+	return cloneMap(db.Settings), nil
+}
+
+// SaveSettings persists the given runtime settings atomically.
+func (r *SettingsRepository) SaveSettings(_ context.Context, settings map[string]interface{}) error {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	db, err := r.s.snapshot()
+	if err != nil {
+		return err
+	}
+	db.Settings = cloneMap(settings)
+	return r.s.flush()
+}
+
+func cloneMap(src map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------

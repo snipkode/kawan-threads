@@ -12,7 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"kawan-threads/internal/config"
+	"kawan-threads/internal/application/runtimeconfig"
 	"kawan-threads/internal/domain/entity"
 	"kawan-threads/internal/domain/port"
 	"kawan-threads/internal/domain/repository"
@@ -33,6 +33,7 @@ type Publisher struct {
 	HistoryRepo   repository.HistoryRepository
 	ThreadsPort   port.ThreadsPort
 	Logger        *slog.Logger
+	Settings      *runtimeconfig.Store
 	MaxRetry      int
 	Timezone      *time.Location
 	// Backoff holds the retry wait durations for rate-limit handling.
@@ -45,7 +46,7 @@ var defaultBackoff = []time.Duration{5 * time.Second, 30 * time.Second, 2 * time
 
 // NewPublisher constructs a Publisher with all dependencies.
 func NewPublisher(
-	cfg *config.Config,
+	settings *runtimeconfig.Store,
 	contentRepo repository.ContentRepository,
 	scheduleRepo repository.ScheduleRepository,
 	publishedRepo repository.PublishedPostRepository,
@@ -53,9 +54,15 @@ func NewPublisher(
 	threadsPort port.ThreadsPort,
 	logger *slog.Logger,
 ) *Publisher {
-	tz, err := time.LoadLocation(cfg.Scheduler.Timezone)
+	timezone := time.UTC.String()
+	maxRetry := 3
+	if settings != nil {
+		timezone = settings.Str(runtimeconfig.SchedulerTimezone, timezone)
+		maxRetry = settings.Int(runtimeconfig.MaxRetry, 3)
+	}
+	tz, err := time.LoadLocation(timezone)
 	if err != nil {
-		logger.Warn("invalid timezone, falling back to UTC", "timezone", cfg.Scheduler.Timezone, "error", err)
+		logger.Warn("invalid timezone, falling back to UTC", "timezone", timezone, "error", err)
 		tz = time.UTC
 	}
 
@@ -66,9 +73,32 @@ func NewPublisher(
 		HistoryRepo:   historyRepo,
 		ThreadsPort:   threadsPort,
 		Logger:        logger,
-		MaxRetry:      cfg.Settings.MaxRetry,
+		Settings:      settings,
+		MaxRetry:      maxRetry,
 		Timezone:      tz,
 	}
+}
+
+// refreshFromSettings re-reads persisted settings and applies them to the
+// live publisher (timezone + max retry).
+func (p *Publisher) refreshFromSettings(ctx context.Context) {
+	if p.Settings == nil {
+		return
+	}
+	p.Settings.Reload(ctx)
+	p.MaxRetry = p.Settings.Int(runtimeconfig.MaxRetry, p.MaxRetry)
+	if tz, err := time.LoadLocation(p.Settings.Str(runtimeconfig.SchedulerTimezone, "Asia/Jakarta")); err == nil {
+		p.Timezone = tz
+	}
+}
+
+// threadsConfigured reports whether the underlying Threads adapter has the
+// minimum credentials. Non-Threads adapters are always considered configured.
+func (p *Publisher) threadsConfigured() bool {
+	if a, ok := p.ThreadsPort.(*threads.ThreadsAdapter); ok {
+		return a.Configured()
+	}
+	return true
 }
 
 // Run starts the publishing loop, ticking every 30 seconds. It blocks until
@@ -84,6 +114,7 @@ func (p *Publisher) Run(ctx context.Context) {
 			p.Logger.Info("publisher worker stopping")
 			return
 		case <-ticker.C:
+			p.refreshFromSettings(ctx)
 			p.runCycle(ctx)
 		}
 	}
@@ -91,6 +122,10 @@ func (p *Publisher) Run(ctx context.Context) {
 
 // runCycle finds all schedules due for publishing and processes each one.
 func (p *Publisher) runCycle(ctx context.Context) {
+	if !p.threadsConfigured() {
+		p.Logger.Debug("publisher: Threads not configured, skipping cycle")
+		return
+	}
 	now := time.Now().In(p.Timezone)
 
 	due, err := p.ScheduleRepo.FindScheduled(ctx, now.UTC())

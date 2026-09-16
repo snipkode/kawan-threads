@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"kawan-threads/internal/application/runtimeconfig"
 	"kawan-threads/internal/application/usecase"
 	"kawan-threads/internal/domain/entity"
 	"kawan-threads/internal/domain/port"
@@ -778,18 +780,34 @@ func (h *TopicHandler) Create(w http.ResponseWriter, r *http.Request) {
 // Settings
 // ---------------------------------------------------------------------------
 
-// SettingsHandler handles /api/settings routes.
+// SettingsHandler handles /api/settings routes. It reads and persists the
+// runtime configuration store, so changes made through the UI take effect
+// immediately and are shared with the worker process.
 type SettingsHandler struct {
 	*BaseHandler
-	settings map[string]interface{}
+	store *runtimeconfig.Store
 }
 
-func NewSettingsHandler(base *BaseHandler, initialSettings map[string]interface{}) *SettingsHandler {
-	return &SettingsHandler{BaseHandler: base, settings: initialSettings}
+func NewSettingsHandler(base *BaseHandler, store *runtimeconfig.Store) *SettingsHandler {
+	return &SettingsHandler{BaseHandler: base, store: store}
 }
 
 func (h *SettingsHandler) Get(w http.ResponseWriter, r *http.Request) {
-	WriteSuccess(w, h.settings)
+	WriteSuccess(w, h.store.All())
+}
+
+// Status reports which integrations are configured/connected.
+func (h *SettingsHandler) Status(w http.ResponseWriter, _ *http.Request) {
+	WriteSuccess(w, map[string]interface{}{
+		"data_store":                 h.store.Str(runtimeconfig.DataStore, ""),
+		"gemini_configured":          h.store.GeminiConfigured(),
+		"threads_configured":         h.store.ThreadsConfigured(),
+		"threads_connected":          h.store.ThreadsConnected(),
+		"auto_approval":              h.store.Bool(runtimeconfig.AutoApproval, false),
+		"auto_publish":               h.store.Bool(runtimeconfig.AutoPublish, false),
+		"timezone":                   h.store.Str(runtimeconfig.SchedulerTimezone, ""),
+		"scheduler_interval_minutes": h.store.Int(runtimeconfig.SchedulerIntervalMinutes, 5),
+	})
 }
 
 func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -798,15 +816,23 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		WriteBadRequest(w, "invalid request body")
 		return
 	}
-	for k, v := range body {
-		h.settings[k] = v
+	values, err := h.store.Update(r.Context(), body)
+	if err != nil {
+		WriteInternalError(w, "failed to save settings")
+		return
 	}
-	WriteSuccess(w, h.settings)
+	WriteSuccess(w, values)
 }
 
 // ---------------------------------------------------------------------------
 // Auth
 // ---------------------------------------------------------------------------
+
+// tokenSaver is implemented by a ThreadsPort that can persist the long-lived
+// access token it received from the OAuth exchange.
+type tokenSaver interface {
+	SaveAccessToken(ctx context.Context, token string) error
+}
 
 // AuthHandler handles Threads OAuth routes.
 type AuthHandler struct {
@@ -840,9 +866,16 @@ func (h *AuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 
 	token, err := h.ThreadsPort.ExchangeCode(r.Context(), code)
 	if err != nil {
-		h.ThreadsPort.GetAuthURL() // noop to avoid unused-variable lint
 		WriteInternalError(w, "failed to exchange code for token")
 		return
+	}
+
+	// Persist the long-lived token so both API and worker pick it up.
+	if saver, ok := h.ThreadsPort.(tokenSaver); ok {
+		if err := saver.SaveAccessToken(r.Context(), token); err != nil {
+			WriteInternalError(w, "failed to persist access token")
+			return
+		}
 	}
 
 	WriteSuccess(w, map[string]string{"access_token": token})

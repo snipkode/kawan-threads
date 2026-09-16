@@ -26,6 +26,8 @@ export const useAnalyticsPillar = () =>
 export const useTopics = () => useQuery({ queryKey: ['topics'], queryFn: API.topics })
 
 export const useSettings = () => useQuery({ queryKey: ['settings'], queryFn: API.settings })
+export const useSettingsStatus = () =>
+  useQuery({ queryKey: ['settings-status'], queryFn: API.settingsStatus })
 
 const invalidate = (qc, keys) => keys.forEach((k) => qc.invalidateQueries({ queryKey: k }))
 
@@ -113,6 +115,6 @@ export const useUpdateSettings = () => {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (payload) => API.updateSettings(payload),
-    onSuccess: () => invalidate(qc, [['settings']]),
+    onSuccess: () => invalidate(qc, [['settings'], ['settings-status']]),
   })
 }

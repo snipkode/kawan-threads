@@ -85,3 +85,11 @@ type ExperimentRepository interface {
 	FindByID(ctx context.Context, id string) (*entity.Experiment, error)
 	FindAll(ctx context.Context) ([]*entity.Experiment, error)
 }
+
+// SettingsRepository persists the runtime configuration map. Values are plain
+// JSON (strings, booleans, numbers), shared between the API process (writes)
+// and the worker process (reads) so UI changes apply without a restart.
+type SettingsRepository interface {
+	GetSettings(ctx context.Context) (map[string]interface{}, error)
+	SaveSettings(ctx context.Context, settings map[string]interface{}) error
+}

@@ -80,6 +80,7 @@ func New(deps Deps, corsOrigins ...string) http.Handler {
 	// Settings
 	// -----------------------------------------------------------------------
 	mux.HandleFunc("GET /api/settings", deps.Settings.Get)
+	mux.HandleFunc("GET /api/settings/status", deps.Settings.Status)
 	mux.HandleFunc("PUT /api/settings", deps.Settings.Update)
 
 	// -----------------------------------------------------------------------

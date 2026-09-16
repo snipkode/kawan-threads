@@ -46,6 +46,7 @@ export const API = {
 
   // Settings
   settings: () => api.get('/api/settings').then(unwrap),
+  settingsStatus: () => api.get('/api/settings/status').then(unwrap),
   updateSettings: (payload) => api.put('/api/settings', payload).then(unwrap),
 
   // Health

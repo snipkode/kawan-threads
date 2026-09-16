@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"kawan-threads/internal/config"
+	"kawan-threads/internal/application/runtimeconfig"
 	"kawan-threads/internal/domain/entity"
 	"kawan-threads/internal/domain/port"
 	"kawan-threads/internal/infrastructure/gemini/prompts"
@@ -21,36 +22,35 @@ import (
 const geminiAPIBase = "https://generativelanguage.googleapis.com/v1beta/models"
 
 // GeminiAdapter implements port.AIProvider using the Gemini REST API.
+// Credentials and model are read from the runtime settings store so they can
+// be changed through the UI without restarting the process.
 type GeminiAdapter struct {
-	apiKey     string
-	model      string
+	settings   *runtimeconfig.Store
 	httpClient *http.Client
 	logger     *slog.Logger
 	maxRetries int
 }
 
-// NewGeminiAdapter constructs a GeminiAdapter from app config.
-func NewGeminiAdapter(cfg *config.Config, logger *slog.Logger) (*GeminiAdapter, error) {
-	if cfg.Gemini.APIKey == "" {
-		return nil, fmt.Errorf("gemini: GEMINI_API_KEY is required")
-	}
-	model := cfg.Gemini.Model
-	if model == "" {
-		model = "gemini-1.5-flash"
-	}
+// NewGeminiAdapter constructs a GeminiAdapter backed by the runtime settings.
+func NewGeminiAdapter(settings *runtimeconfig.Store, logger *slog.Logger) *GeminiAdapter {
 	return &GeminiAdapter{
-		apiKey: cfg.Gemini.APIKey,
-		model:  model,
+		settings: settings,
 		httpClient: &http.Client{
 			Timeout: 60 * time.Second,
 		},
 		logger:     logger,
 		maxRetries: 3,
-	}, nil
+	}
 }
 
 // GenerateContent implements port.AIProvider.
 func (g *GeminiAdapter) GenerateContent(ctx context.Context, req port.GenerateContentRequest) (port.GeneratedContent, error) {
+	apiKey := g.settings.Str(runtimeconfig.GeminiAPIKey, "")
+	if apiKey == "" {
+		return port.GeneratedContent{}, errors.New("gemini: API key not configured — set it in Settings (AI section)")
+	}
+	model := g.settings.Str(runtimeconfig.GeminiModel, "gemini-1.5-flash")
+
 	prompt := g.buildPrompt(req)
 
 	var (
@@ -75,7 +75,7 @@ func (g *GeminiAdapter) GenerateContent(ctx context.Context, req port.GenerateCo
 			}
 		}
 
-		raw, err := g.callAPI(ctx, prompt)
+		raw, err := g.callAPI(ctx, prompt, model, apiKey)
 		if err != nil {
 			lastErr = fmt.Errorf("attempt %d: API call failed: %w", attempt+1, err)
 			continue
@@ -93,7 +93,7 @@ func (g *GeminiAdapter) GenerateContent(ctx context.Context, req port.GenerateCo
 		}
 
 		// Success — tag model and prompt version
-		result.Model = g.model
+		result.Model = model
 		result.PromptVersion = promptVersion(req.Pillar)
 		return result, nil
 	}
@@ -162,7 +162,7 @@ type geminiResponse struct {
 	} `json:"candidates"`
 }
 
-func (g *GeminiAdapter) callAPI(ctx context.Context, prompt string) (string, error) {
+func (g *GeminiAdapter) callAPI(ctx context.Context, prompt, model, apiKey string) (string, error) {
 	reqBody := geminiRequest{
 		Contents: []geminiContent{
 			{Parts: []geminiPart{{Text: prompt}}},
@@ -180,7 +180,7 @@ func (g *GeminiAdapter) callAPI(ctx context.Context, prompt string) (string, err
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/%s:generateContent?key=%s", geminiAPIBase, g.model, g.apiKey)
+	url := fmt.Sprintf("%s/%s:generateContent?key=%s", geminiAPIBase, model, apiKey)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {

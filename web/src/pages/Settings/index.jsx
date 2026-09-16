@@ -19,6 +19,9 @@ export default function Settings() {
     setForm({ ...s, [k]: v })
   }
 
+  // For boolean toggles (button-based, no real event)
+  const toggle = (k) => () => setForm({ ...s, [k]: !s[k] })
+
   const save = () => update.mutate(form ?? s, { onSuccess: () => setForm(null) })
 
   return (
@@ -116,13 +119,13 @@ export default function Settings() {
                 label="Auto-approval"
                 hint="Content langsung disetujui & masuk queue"
                 checked={!!s.auto_approval}
-                onChange={set('auto_approval')}
+                onChange={toggle('auto_approval')}
               />
               <ToggleRow
                 label="Auto-publish"
                 hint="Threads diterbitkan otomatis saat waktunya tiba"
                 checked={!!s.auto_publish}
-                onChange={set('auto_publish')}
+                onChange={toggle('auto_publish')}
               />
             </Card>
 
@@ -164,7 +167,7 @@ export default function Settings() {
                 label="Aktifkan Autopilot"
                 hint="Generate draft harian otomatis saat jam yang ditentukan"
                 checked={!!s.autopilot_enabled}
-                onChange={set('autopilot_enabled')}
+                onChange={toggle('autopilot_enabled')}
               />
               <div>
                 <label className="label">Jumlah konten per hari</label>

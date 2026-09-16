@@ -20,7 +20,8 @@ smart cadence — and learns from engagement to keep improving.
   balancing exploration vs exploitation, and enforces max posts/day,
   min-interval, and priority rules. See `docs/architecture.md`.
 - **Reliable publishing** — idempotent Threads publishing with token
-  persistence, retry with backoff, and rate-limit handling.
+  persistence, retry with backoff, and rate-limit handling. Setup guide:
+  `docs/threads-api.md`.
 - **Analytics feedback loop** — a worker collects post insights and feeds them
   back into AMAB strategy recommendations.
 - **Full web dashboard** — mobile-first React app: dashboard, content

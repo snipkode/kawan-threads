@@ -14,10 +14,12 @@ import (
 	"kawan-threads/internal/domain/repository"
 	"kawan-threads/internal/infrastructure/filestore"
 	"kawan-threads/internal/infrastructure/firebase"
+	"kawan-threads/internal/infrastructure/gemini"
 	"kawan-threads/internal/infrastructure/scheduler"
 	"kawan-threads/internal/infrastructure/threads"
 	applogger "kawan-threads/internal/logger"
 	"kawan-threads/internal/worker/analytics"
+	"kawan-threads/internal/worker/generation"
 	"kawan-threads/internal/worker/publishing"
 )
 
@@ -56,6 +58,8 @@ func main() {
 	var performanceRepo repository.PostPerformanceRepository
 	var historyRepo repository.HistoryRepository
 	var settingsRepo repository.SettingsRepository
+	var topicRepo repository.TopicRepository
+	var versionRepo repository.ContentVersionRepository
 
 	switch cfg.Store.DataStore {
 	case "file":
@@ -72,6 +76,8 @@ func main() {
 		performanceRepo = fs.Performance
 		historyRepo = fs.History
 		settingsRepo = fs.Settings
+		topicRepo = fs.Topic
+		versionRepo = fs.ContentVersion
 
 	default: // firebase
 		firebaseClient, err := firebase.NewFirebaseClient(cfg)
@@ -86,6 +92,8 @@ func main() {
 		performanceRepo = firebase.NewPostPerformanceRepository(firebaseClient)
 		historyRepo = firebase.NewHistoryRepository(firebaseClient)
 		settingsRepo = firebase.NewSettingsRepository(firebaseClient)
+		topicRepo = firebase.NewTopicRepository(firebaseClient)
+		versionRepo = firebase.NewContentVersionRepository(firebaseClient)
 	}
 
 	// -------------------------------------------------------------------------
@@ -161,6 +169,33 @@ func main() {
 			aw.Run(ctx)
 		}()
 	}
+
+	// -------------------------------------------------------------------------
+	// Gemini AI adapter — shared by autopilot (and future workers)
+	// -------------------------------------------------------------------------
+	geminiAdapter := gemini.NewGeminiAdapter(runtimeCfg, log)
+
+	// -------------------------------------------------------------------------
+	// Autopilot worker — daily background draft generation
+	// Fires once per day at autopilot_run_hour (default 07:00 local time).
+	// All output is DRAFT — human review required before publishing.
+	// -------------------------------------------------------------------------
+	autopilot := generation.NewAutopilotWorker(generation.AutopilotOptions{
+		Cfg:         runtimeCfg,
+		ContentRepo: contentRepo,
+		VersionRepo: versionRepo,
+		HistoryRepo: historyRepo,
+		TopicRepo:   topicRepo,
+		AIProvider:  geminiAdapter,
+		Logger:      log,
+		TickInterval: time.Minute,
+	})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		autopilot.Run(ctx)
+	}()
+
 
 	// -------------------------------------------------------------------------
 	// Graceful shutdown

@@ -42,6 +42,12 @@ const (
 	AppEnv                    = "app_env"       // locked: env only
 	FirebaseDatabaseURL       = "db_url"        // locked: env only
 	FirebaseServiceAccountSet = "sa_configured" // locked: env only (bool)
+
+	// Autopilot — daily background content generation
+	AutopilotEnabled    = "autopilot_enabled"
+	AutopilotDailyCount = "autopilot_daily_count"  // total drafts per day (default 3)
+	AutopilotGoal       = "autopilot_goal"          // "website_visit" | "training_signup" | "community_growth"
+	AutopilotRunHour    = "autopilot_run_hour"      // hour (0-23 local time) to trigger generation, default 7
 )
 
 // intKeys are normalised as integers (clamped >= 0).
@@ -50,6 +56,8 @@ var intKeys = map[string]bool{
 	MaxPostsPerDay:           true,
 	MinPostIntervalMinutes:   true,
 	MaxRetry:                 true,
+	AutopilotDailyCount:      true,
+	AutopilotRunHour:         true,
 }
 
 // floatKeys are normalised as floats (clamped to [0, 1]).
@@ -88,6 +96,11 @@ func New(repo repository.SettingsRepository, cfg *config.Config, logger *slog.Lo
 		MinPostIntervalMinutes:   cfg.Settings.MinPostIntervalMinutes,
 		ExplorationRate:          cfg.Settings.ExplorationRate,
 		MaxRetry:                 cfg.Settings.MaxRetry,
+		// Autopilot defaults
+		AutopilotEnabled:    false,
+		AutopilotDailyCount: 3,
+		AutopilotGoal:       "website_visit",
+		AutopilotRunHour:    7,
 	}
 	values := make(map[string]interface{}, len(seed)+4)
 	for k, v := range seed {

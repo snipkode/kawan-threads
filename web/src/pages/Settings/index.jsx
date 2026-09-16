@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Save, RefreshCw, Sparkles, KeyRound, CalendarClock } from 'lucide-react'
+import { Save, RefreshCw, Sparkles, KeyRound, CalendarClock, Bot } from 'lucide-react'
 import { Header } from '../../components/layout/Header'
 import { Card, Spinner, ErrorBox } from '../../components/ui/Card'
 import { useSettings, useSettingsStatus, useUpdateSettings } from '../../hooks/useApi'
@@ -143,6 +143,59 @@ export default function Settings() {
               <div>
                 <label className="label">Max retry publish</label>
                 <input type="number" min="0" className="input" value={s.max_retry ?? 0} onChange={set('max_retry')} />
+              </div>
+            </Card>
+
+            {/* ── Autopilot ── */}
+            <Card className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="flex items-center gap-2 text-sm font-bold text-slate-800">
+                  <Bot size={15} className="text-brand-500" /> Autopilot
+                </h3>
+                <span className={`chip ${s.autopilot_enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                  {s.autopilot_enabled ? 'Aktif' : 'Nonaktif'}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Worker otomatis generate draft konten setiap hari tanpa konfigurasi manual.
+                Semua output tetap <strong>DRAFT</strong> — perlu review sebelum publish.
+              </p>
+              <ToggleRow
+                label="Aktifkan Autopilot"
+                hint="Generate draft harian otomatis saat jam yang ditentukan"
+                checked={!!s.autopilot_enabled}
+                onChange={set('autopilot_enabled')}
+              />
+              <div>
+                <label className="label">Jumlah konten per hari</label>
+                <input
+                  type="number" min="1" max="10" className="input"
+                  value={s.autopilot_daily_count ?? 3}
+                  onChange={set('autopilot_daily_count')}
+                />
+                <p className="mt-1 text-[11px] text-slate-400">Mix otomatis: ~70% single post, ~30% thread series. Pillar dipilih random.</p>
+              </div>
+              <div>
+                <label className="label">Jam generate (0–23, waktu lokal)</label>
+                <input
+                  type="number" min="0" max="23" className="input"
+                  value={s.autopilot_run_hour ?? 7}
+                  onChange={set('autopilot_run_hour')}
+                />
+                <p className="mt-1 text-[11px] text-slate-400">Default jam 07:00 — draft sudah siap di pagi hari untuk direview.</p>
+              </div>
+              <div>
+                <label className="label">Goal konten</label>
+                <select
+                  className="input"
+                  value={s.autopilot_goal ?? 'website_visit'}
+                  onChange={set('autopilot_goal')}
+                >
+                  <option value="website_visit">Kunjungan Website</option>
+                  <option value="training_signup">Pendaftaran Pelatihan</option>
+                  <option value="community_growth">Pertumbuhan Komunitas</option>
+                </select>
+                <p className="mt-1 text-[11px] text-slate-400">Goal menentukan arah CTA yang disuntikkan ke setiap konten yang digenerate.</p>
               </div>
             </Card>
 

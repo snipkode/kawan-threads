@@ -86,7 +86,7 @@ export default function ContentCreate() {
         ))}
       </div>
 
-      <div className="flex-1 p-4 pb-32">
+      <div className="flex-1 p-4 pb-40">
         {generate.isError && (
           <div className="mb-3">
             <ErrorBox message={apiMessage(generate.error, 'Gagal generate konten')} />
@@ -250,7 +250,7 @@ export default function ContentCreate() {
       </div>
 
       {/* Sticky bottom nav */}
-      <div className="fixed bottom-0 left-0 right-0 z-20 border-t border-slate-200 bg-white/95 backdrop-blur-sm px-4 py-3">
+      <div className="fixed bottom-[4.5rem] left-0 right-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur-sm px-4 py-3">
         <div className="flex items-center gap-2">
           {step > 0 && (
             <button type="button" className="btn-secondary flex-none px-3 py-2" onClick={back}>

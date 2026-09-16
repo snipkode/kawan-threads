@@ -38,11 +38,11 @@ function RichText({ text, className = '' }) {
         i++
       }
       nodes.push(
-        <ol key={`ol-${i}`} className="mt-2 space-y-1.5 pl-0 list-none">
+        <ol key={`ol-${i}`} className="mt-2 space-y-2.5 pl-0 list-none">
           {items.map((item, idx) => (
-            <li key={idx} className="flex gap-2.5 text-[13.5px] leading-snug text-slate-700">
-              <span className="flex-none w-5 text-right font-bold text-slate-400 font-serif">{item.num}.</span>
-              <span className="flex-1 font-serif text-justify hyphens-auto" lang="id">
+            <li key={idx} className="flex gap-2.5 items-start">
+              <span className="flex-none w-5 text-right font-bold text-slate-400 font-serif text-[13px] pt-0.5">{item.num}.</span>
+              <span className="flex-1 font-serif text-[13.5px] leading-snug" lang="id">
                 {renderInline(item.text)}
               </span>
             </li>
@@ -56,11 +56,11 @@ function RichText({ text, className = '' }) {
         i++
       }
       nodes.push(
-        <ul key={`ul-${i}`} className="mt-2 space-y-1.5 pl-0 list-none">
+        <ul key={`ul-${i}`} className="mt-2 space-y-2.5 pl-0 list-none">
           {items.map((item, idx) => (
-            <li key={idx} className="flex gap-2.5 text-[13.5px] leading-snug text-slate-700">
-              <span className="flex-none text-slate-300 font-bold mt-0.5">–</span>
-              <span className="flex-1 font-serif text-justify hyphens-auto" lang="id">
+            <li key={idx} className="flex gap-2.5 items-start">
+              <span className="flex-none text-slate-300 font-bold text-[13px] pt-0.5">–</span>
+              <span className="flex-1 font-serif text-[13.5px] leading-snug" lang="id">
                 {renderInline(item.text)}
               </span>
             </li>
@@ -83,24 +83,25 @@ function RichText({ text, className = '' }) {
   return <div className={className}>{nodes}</div>
 }
 
-// Bold **text** and em-dash highlight: "Term — description"
+// Bold **text** and em-dash highlight: "Term — description" renders as two lines
 function renderInline(text) {
   // Split on **bold**
   const parts = text.split(/(\*\*[^*]+\*\*)/g)
+
+  // Check if entire text matches "Term — description" pattern (em-dash or en-dash)
+  const em = text.match(/^(.+?)\s+[—–]\s+(.+)$/)
+  if (em) {
+    return (
+      <span className="block">
+        <strong className="font-bold text-slate-900">{em[1]}</strong>
+        <span className="block mt-0.5 text-slate-500 text-[12.5px] font-normal">{em[2]}</span>
+      </span>
+    )
+  }
+
   return parts.map((part, i) => {
     if (part.startsWith('**') && part.endsWith('**')) {
       return <strong key={i} className="font-bold text-slate-900">{part.slice(2, -2)}</strong>
-    }
-    // Highlight "Term — description": term before em-dash gets bold
-    const em = part.match(/^(.+?)\s+[—–]\s+(.+)$/)
-    if (em) {
-      return (
-        <span key={i}>
-          <strong className="font-bold text-slate-900">{em[1]}</strong>
-          <span className="text-slate-400"> — </span>
-          <span>{em[2]}</span>
-        </span>
-      )
     }
     return <span key={i}>{part}</span>
   })

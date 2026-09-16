@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -216,7 +217,27 @@ func (h *ContentHandler) Generate(w http.ResponseWriter, r *http.Request) {
 	content, err := h.ContentUseCase.GenerateContent(ctx, req)
 	if err != nil {
 		h.Logger.Error("content generation failed", "error", err)
-		WriteInternalError(w, "content generation failed")
+
+		// Surface quota / auth errors with a clear message and proper HTTP status.
+		errMsg := err.Error()
+		switch {
+		case isQuotaErr(errMsg):
+			WriteError(w, http.StatusTooManyRequests,
+				"Kuota atau rate limit Gemini API tercapai. Coba beberapa saat lagi atau periksa plan API kamu di Google AI Studio.",
+				"QUOTA_EXCEEDED")
+		case isAuthErr(errMsg):
+			WriteError(w, http.StatusUnauthorized,
+				"API key Gemini tidak valid atau tidak memiliki akses. Periksa pengaturan API key di Settings.",
+				"INVALID_API_KEY")
+		case isAPIKeyMissing(errMsg):
+			WriteError(w, http.StatusUnprocessableEntity,
+				"Gemini API key belum dikonfigurasi. Masukkan API key di Settings → AI — Gemini.",
+				"API_KEY_NOT_SET")
+		default:
+			WriteError(w, http.StatusInternalServerError,
+				"Gagal generate konten: "+stripInternalPrefix(errMsg),
+				"GENERATION_FAILED")
+		}
 		return
 	}
 	WriteCreated(w, content)
@@ -879,4 +900,46 @@ func (h *AuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	WriteSuccess(w, map[string]string{"access_token": token})
+}
+
+// ---------------------------------------------------------------------------
+// Generation error helpers
+// ---------------------------------------------------------------------------
+
+func isQuotaErr(msg string) bool {
+	return strings.Contains(msg, "quota") ||
+		strings.Contains(msg, "rate limit") ||
+		strings.Contains(msg, "RESOURCE_EXHAUSTED") ||
+		strings.Contains(msg, "429")
+}
+
+func isAuthErr(msg string) bool {
+	return strings.Contains(msg, "API key tidak valid") ||
+		strings.Contains(msg, "INVALID_API_KEY") ||
+		strings.Contains(msg, "API_KEY_INVALID") ||
+		strings.Contains(msg, "403") ||
+		strings.Contains(msg, "401")
+}
+
+func isAPIKeyMissing(msg string) bool {
+	return strings.Contains(msg, "API key not configured") ||
+		strings.Contains(msg, "API key belum")
+}
+
+// stripInternalPrefix removes low-level prefixes like "attempt 1: API call failed: "
+// to produce a clean message for the end user.
+func stripInternalPrefix(msg string) string {
+	prefixes := []string{
+		"gemini: max retries (3) exceeded: attempt 3: API call failed: ",
+		"gemini: max retries (3) exceeded: attempt 3: ",
+		"gemini: max retries (3) exceeded: ",
+		"AI generation failed: ",
+		"attempt 1: API call failed: ",
+	}
+	for _, p := range prefixes {
+		if after, ok := strings.CutPrefix(msg, p); ok {
+			return after
+		}
+	}
+	return msg
 }

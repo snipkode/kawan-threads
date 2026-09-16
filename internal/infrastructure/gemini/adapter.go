@@ -91,6 +91,10 @@ func (g *GeminiAdapter) GenerateContent(ctx context.Context, req port.GenerateCo
 		raw, err := g.callAPI(ctx, retryPrompt, model, apiKey)
 		if err != nil {
 			lastErr = fmt.Errorf("attempt %d: API call failed: %w", attempt+1, err)
+			// Quota and auth errors are terminal — retrying won't help.
+			if IsQuotaError(err) || IsAuthError(err) {
+				return port.GeneratedContent{}, lastErr
+			}
 			retryPrompt = prompt + correction
 			continue
 		}
@@ -217,7 +221,7 @@ func (g *GeminiAdapter) callAPI(ctx context.Context, prompt, model, apiKey strin
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("gemini API HTTP %d: %s", resp.StatusCode, string(respBody))
+		return "", parseGeminiError(resp.StatusCode, respBody)
 	}
 
 	var gemResp geminiResponse
@@ -356,4 +360,75 @@ func parseGeneratedContent(raw string) (port.GeneratedContent, error) {
 // promptVersion returns a version tag for audit/history tracking.
 func promptVersion(pillar entity.ContentPillar) string {
 	return fmt.Sprintf("%s-v1", strings.ToLower(string(pillar)))
+}
+
+// ---------------------------------------------------------------------------
+// Gemini error handling
+// ---------------------------------------------------------------------------
+
+// geminiErrorResponse is the structure Gemini returns for non-200 responses.
+type geminiErrorResponse struct {
+	Error struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Status  string `json:"status"`
+	} `json:"error"`
+}
+
+// ErrQuotaExceeded is returned when the Gemini API quota or rate limit is hit.
+var ErrQuotaExceeded = errors.New("gemini: API quota atau rate limit tercapai — coba beberapa saat lagi atau upgrade plan Gemini API")
+
+// ErrInvalidAPIKey is returned when the API key is rejected.
+var ErrInvalidAPIKey = errors.New("gemini: API key tidak valid atau tidak memiliki akses — periksa API key di Settings")
+
+// parseGeminiError converts a non-200 Gemini HTTP response into a meaningful error.
+func parseGeminiError(statusCode int, body []byte) error {
+	// Try to parse Gemini's structured error body.
+	var gemErr geminiErrorResponse
+	msg := ""
+	if err := json.Unmarshal(body, &gemErr); err == nil && gemErr.Error.Message != "" {
+		msg = gemErr.Error.Message
+	}
+
+	switch statusCode {
+	case http.StatusTooManyRequests: // 429
+		if msg != "" {
+			return fmt.Errorf("%w\nDetail: %s", ErrQuotaExceeded, msg)
+		}
+		return ErrQuotaExceeded
+
+	case http.StatusUnauthorized, http.StatusForbidden: // 401, 403
+		if msg != "" {
+			return fmt.Errorf("%w\nDetail: %s", ErrInvalidAPIKey, msg)
+		}
+		return ErrInvalidAPIKey
+
+	case http.StatusBadRequest: // 400
+		if msg != "" {
+			return fmt.Errorf("gemini: permintaan tidak valid — %s", msg)
+		}
+		return fmt.Errorf("gemini: permintaan tidak valid (HTTP 400)")
+
+	case http.StatusServiceUnavailable, http.StatusInternalServerError: // 503, 500
+		if msg != "" {
+			return fmt.Errorf("gemini: layanan sedang gangguan — %s", msg)
+		}
+		return fmt.Errorf("gemini: layanan Gemini sedang tidak tersedia (HTTP %d), coba lagi nanti", statusCode)
+
+	default:
+		if msg != "" {
+			return fmt.Errorf("gemini: HTTP %d — %s", statusCode, msg)
+		}
+		return fmt.Errorf("gemini: HTTP %d — %s", statusCode, truncate(string(body), 200))
+	}
+}
+
+// IsQuotaError reports whether err is (or wraps) a quota/rate-limit error.
+func IsQuotaError(err error) bool {
+	return errors.Is(err, ErrQuotaExceeded)
+}
+
+// IsAuthError reports whether err is (or wraps) an auth/key error.
+func IsAuthError(err error) bool {
+	return errors.Is(err, ErrInvalidAPIKey)
 }

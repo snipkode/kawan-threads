@@ -45,15 +45,14 @@ export default function ContentList() {
       />
 
       <div className="space-y-3 p-4">
-        <div className="flex gap-1 overflow-x-auto pb-1">
+        <div className="flex gap-1 rounded-xl bg-white p-1 ring-1 ring-slate-200">
           {TABS.map((t) => (
             <button
               key={t.value}
+              type="button"
               onClick={() => switchFilter(setStatus)(t.value)}
-              className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-                status === t.value
-                  ? 'bg-brand-600 text-white'
-                  : 'bg-white text-slate-500 ring-1 ring-slate-200'
+              className={`min-w-0 flex-1 rounded-lg px-1 py-2 text-[11px] font-semibold leading-tight transition sm:text-xs ${
+                status === t.value ? 'bg-brand-600 text-white' : 'text-slate-500'
               }`}
             >
               {t.label}

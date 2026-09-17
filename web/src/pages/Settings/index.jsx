@@ -1,9 +1,10 @@
-import { useState } from 'react'
-import { Save, RefreshCw, ChevronDown } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Save, RefreshCw, ChevronDown, LogIn } from 'lucide-react'
 import { Header } from '../../components/layout/Header'
 import { Spinner, ErrorBox } from '../../components/ui/Card'
 import { useSettings, useSettingsStatus, useUpdateSettings } from '../../hooks/useApi'
 import { apiMessage } from '../../types'
+import API from '../../services/api'
 
 const GOALS = [
   { value: 'website_visit', label: 'Kunjungan Website' },
@@ -32,6 +33,40 @@ export default function Settings() {
   const toggle = (k) => () => setForm({ ...s, [k]: !s[k] })
 
   const save = () => update.mutate(form ?? s, { onSuccess: () => setForm(null) })
+
+  // After the Threads OAuth flow (popup or new tab), the token is saved
+  // server-side. Refresh status/filters whenever the user comes back so the
+  // "Terkoneksi" state appears without a manual reload.
+  useEffect(() => {
+    const refresh = () => {
+      settings.refetch()
+      status.refetch()
+    }
+    const onMessage = (e) => {
+      if (e.data?.type === 'THREADS_OAUTH') refresh()
+    }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh()
+    }
+    window.addEventListener('focus', refresh)
+    window.addEventListener('message', onMessage)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.removeEventListener('focus', refresh)
+      window.removeEventListener('message', onMessage)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Opens Threads OAuth. Uses window.open when possible so the callback page
+  // can auto-close and notify this tab; falls back to a full redirect if the
+  // popup is blocked.
+  const startThreadsAuth = () => {
+    const url = API.threadsAuthURL()
+    const win = window.open(url, '_blank')
+    if (!win) window.location.assign(url)
+  }
 
   return (
     <>
@@ -99,6 +134,26 @@ export default function Settings() {
                     okText="Terkoneksi"
                     failText="Belum ada access token"
                   />
+                  <Row
+                    label="Login & Hubungkan"
+                    hint="Login pakai akun Threads — token otomatis tersimpan"
+                  >
+                    <button
+                      type="button"
+                      onClick={startThreadsAuth}
+                      className="btn-primary shrink-0 px-3.5 py-2 text-xs"
+                    >
+                      <LogIn size={13} /> Login
+                    </button>
+                  </Row>
+                </Section>
+                <p className="px-1 text-[11px] leading-relaxed text-slate-400">
+                  Klik <b className="text-brand-600">Login</b> → pilih akun Threads → otomatis
+                  dikembalikan ke aplikasi. Token long-lived tersimpan otomatis, tidak perlu
+                  salin-tempel token manual.
+                </p>
+
+                <Section title="Kredensial OAuth">
                   <InputRow
                     label="Client ID"
                     value={s.threads_client_id ?? ''}
@@ -129,8 +184,9 @@ export default function Settings() {
                   />
                 </Section>
                 <p className="px-1 text-[11px] leading-relaxed text-slate-400">
-                  Kredensial OAuth. Token bisa didapat lewat alur OAuth ({`/api/auth/threads`}) dan
-                  tersimpan otomatis.
+                  Isi Client ID, Client secret &amp; Redirect URI sebelum login. Saat login via
+                  OAuth, {`/api/auth/threads`} dipakai &amp; token tersimpan otomatis — kolom
+                  Access token hanya fallback manual.
                 </p>
               </>
             )}

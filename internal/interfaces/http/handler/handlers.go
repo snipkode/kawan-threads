@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"html"
 	"net/http"
 	"strconv"
 	"strings"
@@ -875,31 +877,87 @@ func (h *AuthHandler) RedirectToAuth(w http.ResponseWriter, r *http.Request) {
 
 func (h *AuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	if h.ThreadsPort == nil {
-		WriteError(w, http.StatusServiceUnavailable, "Threads integration not configured", "THREADS_UNAVAILABLE")
+		renderAuthResult(w, false, "Gagal Terhubung", "Integrasi Threads belum dikonfigurasi di Settings.")
 		return
 	}
 
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		WriteBadRequest(w, "code query parameter is required")
+		renderAuthResult(w, false, "Gagal Terhubung", "Kode otorisasi tidak ditemukan dari Threads.")
 		return
 	}
 
 	token, err := h.ThreadsPort.ExchangeCode(r.Context(), code)
 	if err != nil {
-		WriteInternalError(w, "failed to exchange code for token")
+		renderAuthResult(w, false, "Gagal Terhubung", "Token tidak berhasil didapatkan. "+err.Error())
 		return
 	}
 
 	// Persist the long-lived token so both API and worker pick it up.
 	if saver, ok := h.ThreadsPort.(tokenSaver); ok {
 		if err := saver.SaveAccessToken(r.Context(), token); err != nil {
-			WriteInternalError(w, "failed to persist access token")
+			renderAuthResult(w, false, "Gagal Terhubung", "Token didapat tapi gagal disimpan. "+err.Error())
 			return
 		}
 	}
 
-	WriteSuccess(w, map[string]string{"access_token": token})
+	renderAuthResult(w, true, "Berhasil Terhubung", "Akun Threads tersambung dan token long-lived sudah tersimpan otomatis.")
+}
+
+// renderAuthResult writes a small self-contained HTML landing page for the
+// Threads OAuth callback. The page announces success/failure, notifies any
+// opener window (popup flow) and auto-closes it, and always offers a manual
+// link back into the app for same-tab flows.
+func renderAuthResult(w http.ResponseWriter, ok bool, title, message string) {
+	icon := "✕"
+	dotColor := "#fecaca"
+	iconColor := "#e11d48"
+	if ok {
+		icon = "✓"
+		dotColor = "#d1fae5"
+		iconColor = "#10b981"
+	}
+	t := html.EscapeString(title)
+	m := html.EscapeString(message)
+
+	page := fmt.Sprintf(`<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>KAWAN · Threads</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    min-height: 100vh; display: grid; place-items: center;
+    background: #eef2ff; color: #1e293b; padding: 24px; }
+  .card { width: 100%%; max-width: 360px; background: #fff; border-radius: 24px;
+    padding: 32px 24px; text-align: center; box-shadow: 0 10px 30px rgba(79,70,229,.15); }
+  .dot { width: 56px; height: 56px; border-radius: 50%; margin: 0 auto 16px;
+    display: grid; place-items: center; background: %s; color: %s; font-size: 28px; font-weight: 700; }
+  h1 { font-size: 18px; margin-bottom: 8px; }
+  p { font-size: 14px; color: #64748b; line-height: 1.55; }
+  a { display: block; margin-top: 22px; background: #4f46e5; color: #fff;
+    text-decoration: none; font-weight: 600; font-size: 14px; padding: 13px; border-radius: 12px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="dot">%s</div>
+  <h1>%s</h1>
+  <p>%s</p>
+  <a href="/settings" rel="noopener">Buka Aplikasi</a>
+</div>
+<script>
+  try { if (window.opener) { window.opener.postMessage({ type: "THREADS_OAUTH", ok: %t }, "*"); window.opener.focus(); } } catch (e) {}
+  if (window.opener) { setTimeout(function () { window.close(); }, 700); }
+</script>
+</body>
+</html>`, dotColor, iconColor, icon, t, m, ok)
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(page))
 }
 
 // ---------------------------------------------------------------------------

@@ -49,6 +49,9 @@ export const API = {
   settingsStatus: () => api.get('/api/settings/status').then(unwrap),
   updateSettings: (payload) => api.put('/api/settings', payload).then(unwrap),
 
+  // Threads OAuth — start the login flow (redirect to Threads authorize page).
+  threadsAuthURL: () => `${baseURL}/api/auth/threads`,
+
   // Health
   health: () => api.get('/api/health').then(unwrap),
 }
